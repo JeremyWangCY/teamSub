@@ -87,7 +87,56 @@ APP_DISPLAY_NAME = "TeamsSub"
 APP_VERSION = "0.1.0"
 
 CAPTION_DIR = Path(os.environ.get("TEAMSSUB_DATA_DIR", APP_DIR)) / "captions"
-CAPTION_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _ensure_data_dirs() -> str:
+    """建好数据目录；建不出来就返回一句中文说明（正常时返回空串）。
+
+    不在模块顶层直接 mkdir：exe 被放到 Program Files、只读盘，或 U 盘拔出
+    后的盘符上时会抛 PermissionError/FileExistsError，顶层抛异常的结果是
+    PyInstaller 弹一句英文 "Unhandled exception in script"，用户无从下手。
+    改由 main() 捕获并弹中文提示。
+    """
+    try:
+        CAPTION_DIR.mkdir(parents=True, exist_ok=True)
+        return ""
+    except Exception as exc:
+        return ("无法创建数据目录：\n%s\n\n%s\n\n"
+                "请把程序放到有写权限的目录（不要放在 Program Files 下），\n"
+                "或设置环境变量 TEAMSSUB_DATA_DIR 指向一个可写目录。"
+                % (CAPTION_DIR, exc))
+
+
+def _cleanup_stale_mei_dirs(max_age_seconds=3 * 86400):
+    """清掉被强杀留下的 PyInstaller 解压目录。
+
+    单文件 exe 每次启动都解压自身到临时目录的 _MEIxxxx，正常退出会自动删；
+    但被任务管理器强杀或关机硬终止时会留下几十 MB。用户不会去清临时目录，
+    几次之后就白占磁盘。
+
+    只在冻结模式跑，且只删超过 max_age_seconds 的目录——太新的可能属于另一个
+    正在运行的实例。全程静默，清理失败不影响启动。
+    """
+    if not getattr(sys, "frozen", False):
+        return
+    import shutil
+    import tempfile
+    meipass = getattr(sys, "_MEIPASS", None)
+    try:
+        cutoff = time.time() - max_age_seconds
+        for entry in Path(tempfile.gettempdir()).glob("_MEI*"):
+            if not entry.is_dir():
+                continue
+            if meipass and str(entry) == str(meipass):
+                continue                      # 自己这份，别删
+            try:
+                if entry.stat().st_mtime >= cutoff:
+                    continue                  # 可能是别人正在用的
+                shutil.rmtree(entry, ignore_errors=True)
+            except OSError:
+                continue
+    except Exception:
+        pass
 
 
 def data_dir():
@@ -131,39 +180,6 @@ def _install_variable_guard():
 
 
 _install_variable_guard()
-
-
-def _cleanup_stale_mei_dirs(max_age_seconds=3 * 86400):
-    """清掉被杀软/强杀留下的 PyInstaller 解压目录。
-
-    单文件 exe 每次启动都把自身解压到临时目录的 _MEIxxxx，正常退出会自动删。
-    但被任务管理器强杀、或关机时进程被硬终止，那个目录就留下了（几十 MB）。
-    用户不会去清 %TEMP%，几次之后就白占几百 MB 磁盘。
-
-    只在冻结模式跑，只删**超过 max_age_seconds 的天**的目录：太新的可能属于
-    另一个正在运行的实例，误删会让它崩掉。全程 try/except —— 清理失败绝不该
-    影响启动。
-    """
-    if not getattr(sys, "frozen", False):
-        return
-    import shutil
-    import tempfile
-    meipass = getattr(sys, "_MEIPASS", None)
-    try:
-        cutoff = time.time() - max_age_seconds
-        for entry in Path(tempfile.gettempdir()).glob("_MEI*"):
-            if not entry.is_dir():
-                continue
-            if meipass and str(entry) == str(meipass):
-                continue                      # 自己这份，别删
-            try:
-                if entry.stat().st_mtime >= cutoff:
-                    continue                  # 可能是别人正在用的
-                shutil.rmtree(entry, ignore_errors=True)
-            except OSError:
-                continue
-    except Exception:
-        pass
 
 
 # ----------------------------------------------------------------------------
@@ -3201,7 +3217,17 @@ def _acquire_single_instance() -> bool:
 def main():
     if not _acquire_single_instance():
         return
-    _cleanup_stale_mei_dirs()      # 先清残留，再启动（不影响本次运行）
+    _cleanup_stale_mei_dirs()       # 先清残留，不影响本次运行
+    # 数据目录建不出来时用中文说清楚，别留给 PyInstaller 弹英文栈
+    problem = _ensure_data_dirs()
+    if problem:
+        try:
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(
+                None, problem, "%s %s" % (APP_DISPLAY_NAME, APP_VERSION), 0x10)
+        except Exception:
+            pass
+        return
     _write_instance_file()
     root = tk.Tk()
     install_crash_log(root)

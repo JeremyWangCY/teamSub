@@ -67,17 +67,42 @@ def open_settings(self):
         # 换主题 = 换整套译名对照，不会串味。
         topic_page=pages[1]
         body=tk.Frame(topic_page,bg=W);body.pack(fill='both',expand=True)
-        lb=UK.PickList(body,on_pick=lambda key:on_pick(key),width=170,rows=8,bg=W)
+        # rows 只是初始值：PickList 会按实际高度调整可见行数，窗口缩小时不会
+        # 把下面那半个输入框挤出可视区。
+        lb=UK.PickList(body,on_pick=lambda key:on_pick(key),width=170,rows=6,bg=W)
         lb.pack(side='left',fill='y',padx=(0,20))
         right=tk.Frame(body,bg=W);right.pack(side='left',fill='both',expand=True)
         e_tname=UK.Field(right,bg=W,height=36);e_tname.pack(fill='x')
-        tb=tk.Frame(right,bg=W);tb.pack(anchor='w',pady=(8,10))
+        tb=tk.Frame(right,bg=W);tb.pack(anchor='w',pady=(6,6))
         header=tk.Frame(right,bg=W);header.pack(fill='x',pady=(0,4))
         lab(header,'会议背景').pack(side='left')
-        t_brief=UK.RoundedText(right,lines=4,bg=W);t_brief.pack(fill='both',expand=True)
-        terms_header=tk.Frame(right,bg=W);terms_header.pack(fill='x',pady=(10,4))
+        # 两个输入框平分剩余高度，而不是各写死 4 行。
+        # 关键在 pack_propagate(False)：RoundedText 自己关掉了尺寸传播、初始
+        # 高度偏小，若容器按「子控件请求高度之和」撑高自己，整页 reqheight
+        # 会超过最小窗口的可用区，底部控件被裁掉且无处滚动。
+        edits=tk.Frame(right,bg=W);edits.pack(fill='both',expand=True)
+        edits.pack_propagate(False)
+        t_brief=UK.RoundedText(edits,lines=2,bg=W);t_brief.pack(fill='both',expand=True)
+        terms_header=tk.Frame(edits,bg=W);terms_header.pack(fill='x',pady=(8,4))
         lab(terms_header,'译名对照').pack(side='left')
-        t_gloss=UK.RoundedText(right,lines=4,bg=W);t_gloss.pack(fill='both',expand=True)
+        t_gloss=UK.RoundedText(edits,lines=2,bg=W);t_gloss.pack(fill='both',expand=True)
+
+        def fit_editors(_event=None):
+            """把「会议背景 / 译名对照」按当前可用高度对半分（最小 2 行）。"""
+            try:
+                avail = edits.winfo_height() - terms_header.winfo_height() - 12
+                if avail < 40:
+                    return
+                half = max(t_brief.lh * 2 + 16, (avail - 6) // 2)
+                for box in (t_brief, t_gloss):
+                    if box.winfo_height() != half:
+                        box.configure(height=half)
+                        box.h = half
+            except Exception:
+                pass
+        edits.bind('<Configure>', fit_editors)
+        # 首次显示时 <Configure> 可能早于真实尺寸，补一次 idle 校准
+        topic_page.after_idle(fit_editors)
 
         pairs=[('上文条数','ctx',self.tcfg.context_n),('句末等待 ms','sent',self.tcfg.sentence_end_grace_ms),
                ('兜底等待 ms','settle',self.tcfg.settle_ms),('批量条数','batch',self.tcfg.batch_size),

@@ -1244,10 +1244,23 @@ class PickList(tk.Canvas):
         self.rows = rows
         self.offset = 0
         self._hover = -1
-        self.bind("<Configure>", lambda e: self._paint())
+        # 高度不再写死：窗口缩小时列表跟着变矮，可见行数按实际高度重算。
+        # 固定 rows 会在小窗口里把整页撑高，下面的控件被挤出可视区。
+        self.bind("<Configure>", self._on_resize)
         self.bind("<Button-1>", self._click)
         self.bind("<Motion>", self._motion)
         self.bind("<MouseWheel>", self._wheel)
+        self._paint()
+
+    def _on_resize(self, _event=None):
+        """按当前高度更新可见行数（滚轮与翻页都依赖 self.rows）。"""
+        try:
+            visible = max(2, (self.winfo_height() - 10) // self.ROW_H)
+            if visible != self.rows:
+                self.rows = visible
+                self._clamp()
+        except Exception:
+            pass
         self._paint()
 
     def set_items(self, items, key=None, scroll=True):

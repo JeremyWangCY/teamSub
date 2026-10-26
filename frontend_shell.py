@@ -61,12 +61,14 @@ def build(self):
     rt.pack(side="right")
     self.status = UK.StatusPill(rt, "连接中", bg=UK.C.N50)
     self.status.pack(side="left", padx=(0, 10))
-    UK.Pill(rt, "导出整场会议", self.export, kind="primary", height=36).pack(side="right", padx=(12, 0))
+    self.btn_export = UK.Pill(rt, "导出整场会议", self.export, kind="primary", height=36)
+    self.btn_export.pack(side="right", padx=(12, 0))
     self.btn_more = UK.Pill(rt, "⋯", self._open_menu, kind="ghost", padx=11)
     self.btn_more.pack(side="right", padx=(8, 0))
     self.btn_settings = UK.Pill(rt, "设置", self.open_settings, kind="ghost")
-    # Settings are available in workspace navigation.
-    self.btn_tr = UK.Pill(rt, "翻译 开" if self.trans_on else "翻译 关", self.toggle_translate, kind="tint" if self.trans_on else "ghost")
+    # 设置入口也常驻在左侧导航里，这里不再重复放一个按钮。
+    self.btn_tr = UK.Pill(rt, "翻译 开" if self.trans_on else "翻译 关", self.toggle_translate,
+                          kind="tint" if self.trans_on else "ghost")
     self.btn_tr.pack(side="right")
 
     # ---------- 检索 + 翻译方向 ----------

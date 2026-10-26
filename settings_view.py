@@ -72,37 +72,91 @@ def open_settings(self):
         lb=UK.PickList(body,on_pick=lambda key:on_pick(key),width=170,rows=6,bg=W)
         lb.pack(side='left',fill='y',padx=(0,20))
         right=tk.Frame(body,bg=W);right.pack(side='left',fill='both',expand=True)
-        e_tname=UK.Field(right,bg=W,height=36);e_tname.pack(fill='x')
-        tb=tk.Frame(right,bg=W);tb.pack(anchor='w',pady=(6,6))
+        e_tname=UK.Field(right,bg=W,height=34);e_tname.pack(fill='x')
+        tb=tk.Frame(right,bg=W);tb.pack(anchor='w',pady=(4,4))
         header=tk.Frame(right,bg=W);header.pack(fill='x',pady=(0,4))
         lab(header,'会议背景').pack(side='left')
-        # 两个输入框平分剩余高度，而不是各写死 4 行。
-        # 关键在 pack_propagate(False)：RoundedText 自己关掉了尺寸传播、初始
-        # 高度偏小，若容器按「子控件请求高度之和」撑高自己，整页 reqheight
-        # 会超过最小窗口的可用区，底部控件被裁掉且无处滚动。
+        # 两个输入框用 grid 分成等高的两行（weight=1），让 Tk 自己保证「一样高」。
+        #
+        # 之前用 pack + fill='both' + expand：RoundedText 内部关掉了尺寸传播，
+        # expand 拉不动它，容器一紧张就把后一个压扁（实测 66 / 57 一高一矮），
+        # 靠回调手算像素去补也补不稳。grid 的 rowconfigure 权重是布局层的承诺，
+        # 不依赖回调时机，首绘就对称。
+        #
+        # 两个标题行用 weight=0，只占各自需要的高度。
         edits=tk.Frame(right,bg=W);edits.pack(fill='both',expand=True)
-        edits.pack_propagate(False)
-        t_brief=UK.RoundedText(edits,lines=2,bg=W);t_brief.pack(fill='both',expand=True)
-        terms_header=tk.Frame(edits,bg=W);terms_header.pack(fill='x',pady=(8,4))
+        edits.columnconfigure(0,weight=1)
+        edits.rowconfigure(0,weight=1,uniform='ed')
+        edits.rowconfigure(2,weight=1,uniform='ed')
+        t_brief=UK.RoundedText(edits,lines=2,bg=W)
+        t_brief.grid(row=0,column=0,sticky='nsew')
+        terms_header=tk.Frame(edits,bg=W)
+        terms_header.grid(row=1,column=0,sticky='we',pady=(6,2))
         lab(terms_header,'译名对照').pack(side='left')
-        t_gloss=UK.RoundedText(edits,lines=2,bg=W);t_gloss.pack(fill='both',expand=True)
+        t_gloss=UK.RoundedText(edits,lines=2,bg=W)
+        t_gloss.grid(row=2,column=0,sticky='nsew')
 
         def fit_editors(_event=None):
-            """把「会议背景 / 译名对照」按当前可用高度对半分（最小 2 行）。"""
+            """两框等高由 grid 权重保证；这里只负责把实际像素高度同步给控件。
+
+            RoundedText 关掉了尺寸传播、靠 self.h 决定可见高，所以 grid 分给它的
+            格子变高之后要回写一次高度，否则它仍按初始 2 行画。
+            """
             try:
-                avail = edits.winfo_height() - terms_header.winfo_height() - 12
-                if avail < 40:
+                if not edits.winfo_ismapped():
+                    topic_page.after(30, fit_editors)
                     return
-                half = max(t_brief.lh * 2 + 16, (avail - 6) // 2)
+                each = max(t_brief.lh * 2 + 20, t_brief.winfo_height())
                 for box in (t_brief, t_gloss):
-                    if box.winfo_height() != half:
-                        box.configure(height=half)
-                        box.h = half
+                    if box.h != each:
+                        box.configure(height=each)
+                        box.h = each
             except Exception:
                 pass
+        t_brief.bind('<Configure>', fit_editors, add='+')
+        t_gloss.bind('<Configure>', fit_editors, add='+')
+
+        def fit_editors(_event=None):
+            """把两个输入框严格平分可用高度，且各自不低于 2 整行。
+
+            两个坑：
+            1. 高度口径要和 RoundedText 内部一致（``lines*lh + 20``）。早先这里
+               少算 4px，于是「2 行」实际只画出 1.35 行。
+            2. ``<Configure>`` 可能在容器还没有真实尺寸时就触发，此时算出来的
+               avail 偏大（首绘出现 72/51 不对称）。所以先要求真实尺寸，没有就
+               推迟到下一次事件循环再算。
+            """
+            try:
+                if not edits.winfo_ismapped():
+                    # 页面还没显示出来，尺寸都是 1x1，等它 Map 之后再算
+                    topic_page.after(30, fit_editors)
+                    return
+                # 右栏总高扣掉固定部分（名称框、按钮行、两个标题行），剩下的
+                # 才分给两个输入框。用宿主 right 的高度来算，而不是 edits——
+                # edits 的高度本身由内容决定，拿它算会导致自我循环。
+                fixed = (e_tname.winfo_reqheight() + tb.winfo_reqheight()
+                         + header.winfo_reqheight()
+                         + terms_header.winfo_reqheight() + 34)
+                avail = right.winfo_height() - fixed
+                if avail < 60:
+                    return
+                two_lines = t_brief.lh * 2 + 20      # 与 RoundedText 同口径
+                # 两框必须**同一高度**：一个 66 一个 57 的观感比整体矮一点更糟
+                each = max(two_lines, avail // 2)
+                for box in (t_brief, t_gloss):
+                    if box.h != each:
+                        box.configure(height=each)
+                        box.h = each
+            except Exception:
+                pass
+        def settle(_e=None):
+            # 连跑几拍：切页签瞬间 right 还是 1x1，等布局稳定后再算才准。
+            for delay in (0, 30, 90, 200):
+                topic_page.after(delay, fit_editors)
         edits.bind('<Configure>', fit_editors)
-        # 首次显示时 <Configure> 可能早于真实尺寸，补一次 idle 校准
-        topic_page.after_idle(fit_editors)
+        right.bind('<Configure>', fit_editors, add='+')
+        topic_page.bind('<Map>', settle, add='+')
+        settle()
 
         pairs=[('上文条数','ctx',self.tcfg.context_n),('句末等待 ms','sent',self.tcfg.sentence_end_grace_ms),
                ('兜底等待 ms','settle',self.tcfg.settle_ms),('批量条数','batch',self.tcfg.batch_size),

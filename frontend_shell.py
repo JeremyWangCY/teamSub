@@ -161,6 +161,9 @@ def build(self):
     self.txt.bind("<MouseWheel>", self.on_wheel, add="+")
     self.txt.bind("<Double-Button-1>", self.on_dblclick)
     self.txt.bind("<Button-3>", self.on_right_click)
+    # 右键菜单：命中译文行时 on_right_click 会返回 "break" 接管（修正译法），
+    # 没命中就落到这里弹复制菜单——只读正文也能一键复制。
+    UK.attach_text_menu(self.txt)
 
     # ---------- 内推层 ----------
     self.sheet_layer = tk.Frame(self.content, bg=UK.C.N50)

@@ -32,7 +32,7 @@ def open_export(app, records=None, title=None, initial_format='md'):
     current = ME.snapshot(ME.filtered(app.records, app.speaker_filter, app.search.value(),
                                      getattr(app, 'display_start', 0))) if live else frozen
     if not frozen:
-        app._notice('还没有可导出的记录。开启会议实时字幕后即可开始采集。')
+        app._notice('还没有可导出的记录。')
         return
 
     def build(parent):
@@ -64,6 +64,7 @@ def open_export(app, records=None, title=None, initial_format='md'):
         preview = tk.Text(b, height=3, wrap='word', bg=UK.C.N100, fg=UK.C.TEXT,
                           font=UK.F_UI, padx=16, pady=12, relief='flat', bd=0)
         preview.pack(fill='both', expand=True, pady=(4,0))
+        UK.attach_text_menu(preview)      # 预览稿也允许右键复制
         app._sheet_footer.pack(side='bottom',fill='x',padx=36,pady=(6,14))
         result = label(app._sheet_footer, '', small=True)
         actions = tk.Frame(app._sheet_footer, bg=UK.C.N50)
@@ -94,7 +95,7 @@ def open_export(app, records=None, title=None, initial_format='md'):
                 preview.delete('1.0', 'end')
                 try:
                     preview.insert('end', ME.format_meeting(title+'（前 3 条预览）', recs[:3], opt)
-                                   + ('\n… 预览前 3 条，文件包含上述全部条目。' if len(recs)>3 else ''))
+                                   + ('\n…（预览前 3 条，导出含全部）' if len(recs)>3 else ''))
                 except ValueError as exc:
                     preview.insert('end', str(exc))
                 preview.configure(state='disabled')
@@ -279,11 +280,48 @@ def open_history(app):
                     else:
                         view_history(app, sessions[0], records)
                 app.background(lambda: MR.merge_sessions(paths), done)
+        def do_delete():
+            """删除所选会议：移入回收站可还原；正在记录的这场会被拒绝。"""
+            sessions = selected()
+            if not sessions:
+                status.configure(text='请先选择要删除的会议记录。')
+                return
+            names = '、'.join(s.title for s in sessions[:3])
+            if len(sessions) > 3:
+                names += f' 等 {len(sessions)} 场'
+            # 用系统确认框而不是 _confirm()：后者会推一层界面，删完还要弹回来，
+            # 而且它的回调是异步的，容易在列表已重建的情况下操作旧控件。
+            if not messagebox.askyesno(
+                    '删除会议记录',
+                    f'删除「{names}」？\n\n'
+                    '记录会移入系统回收站，可以在资源管理器里还原。',
+                    parent=app.root, default='no'):
+                return
+            paths = [s.path for s in sessions]
+            active = app.save_path
+
+            def work():
+                return MR.delete_sessions(paths, active_path=active)
+
+            def done(value):
+                if not b.winfo_exists():
+                    return
+                removed, refused = value
+                if refused:
+                    status.configure(text='部分未删除：' + '；'.join(refused)[:300])
+                elif removed:
+                    status.configure(text=f'已移入回收站 {len(removed)} 个文件')
+                refresh()          # 无论成败都重读列表，界面反映真实磁盘状态
+
+            status.configure(text='正在删除…')
+            app.background(work, done)
+
         app._sheet_footer.pack(side='bottom',fill='x',padx=24,pady=(8,12))
         row = tk.Frame(app._sheet_footer,bg=UK.C.N50)
         row.pack(fill='x')
         for text, action, kind in [('打开记录','view','tint'), ('导出 / 合并所选','export','primary'), ('续接所选会议','resume','ghost')]:
             UK.Pill(row,text,lambda a=action: read(a),kind=kind).pack(side='left',padx=(0,12))
+        UK.Pill(row,'删除',do_delete,kind='ghost').pack(side='left',padx=(0,12))
         UK.Pill(row,'刷新',refresh,kind='ghost').pack(side='right')
         listing.bind('<Double-Button-1>',lambda e: read('view'))
         refresh()
@@ -468,6 +506,9 @@ def view_history(app, session, records):
         # 也方便回归测试直接调用（event_generate 造不出 Text 的标签点击）
         txt.marker_click = on_text_click
         txt.bind('<Button-1>', on_text_click, add='+')
+        # 只读正文也要能右键复制：Ctrl+C 一直可用，但右键是用户的第一反应，
+        # 右键没菜单等于「不能复制」。
+        UK.attach_text_menu(txt)
 
         # ---------------- 底部 ----------------
         app._sheet_footer.pack(side='bottom', fill='x', padx=24, pady=(8, 12))

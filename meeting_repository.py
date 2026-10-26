@@ -166,3 +166,117 @@ def save_edits(path, updates):
     written = update_records(path, updates)
     rewrite_markdown(path)
     return written
+
+def session_files(path):
+    """一场会议在磁盘上占用的所有文件（.sqlite3 与 .md 成对出现）。
+
+    删除时必须一起处理：只删 .md 会留下数据库（照样能读出全部内容），
+    只删 .sqlite3 又会留下可读的正文投影。
+    """
+    path = Path(path)
+    files = []
+    if path.suffix.lower() == ".md":
+        files.append(path)
+        db = path.with_suffix(".sqlite3")
+        if db.exists():
+            files.append(db)
+    else:
+        files.append(path)
+        md = path.with_suffix(".md")
+        if md.exists():
+            files.append(md)
+    return [f for f in files if f.exists()]
+
+
+def delete_sessions(paths, active_path=None):
+    """把选中的会议记录移入回收站，返回 (成功删除的路径, 拒绝原因列表)。
+
+    三条硬约束，都是「删了就回不来」的防线：
+
+    1. **进回收站，不永久删**。用户手滑是常态，办公软件不该让一次误点变成
+       不可逆事故。用 SHFileOperation + FOF_ALLOWUNDO，用户在资源管理器里
+       还能找回来。
+    2. **正在记录的这场不许删**。它的 SQLite 正被写线程持有，删了轻则保存
+       报错、重则半场记录丢失。
+    3. **成对删除**。.md 与 .sqlite3 必须一起走（见 session_files）。
+
+    返回的第二项是给界面用的中文原因，调用方据此提示，不要静默失败。
+    """
+    active = None
+    if active_path is not None:
+        try:
+            active = Path(active_path).resolve()
+        except OSError:
+            active = None
+
+    removed, refused, batch = [], [], []
+    for raw in paths:
+        path = Path(raw)
+        try:
+            resolved = path.resolve()
+        except OSError:
+            resolved = path
+        if active is not None and resolved in (active,
+                                               active.with_suffix(".sqlite3"),
+                                               active.with_suffix(".md")):
+            refused.append(f"{path.stem}：正在记录中，不能删除")
+            continue
+        files = session_files(path)
+        if not files:
+            refused.append(f"{path.stem}：文件已不存在")
+            continue
+        batch.extend(files)
+
+    if batch:
+        ok, reason = _recycle(batch)
+        if ok:
+            removed = batch
+        else:
+            refused.append(reason)
+    return removed, refused
+
+
+def _recycle(files):
+    """把文件移入回收站，返回 (是否全部成功, 失败原因)。
+
+    优先用 SHFileOperationW(FOF_ALLOWUNDO|FOF_NOCONFIRMATION|FOF_SILENT)，
+    它在资源管理器层面「删除」，用户能从回收站还原。
+    非 Windows 或调用失败时退回 os.unlink（永久删除），但要如实告知。
+    """
+    files = [Path(f) for f in files]
+    if not files:
+        return True, ""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class SHFILEOPSTRUCTW(ctypes.Structure):
+            _fields_ = [("hwnd", wintypes.HWND),
+                        ("wFunc", wintypes.UINT),
+                        ("pFrom", wintypes.LPCWSTR),
+                        ("pTo", wintypes.LPCWSTR),
+                        ("fFlags", ctypes.c_uint16),
+                        ("fAnyOperationsAborted", wintypes.BOOL),
+                        ("hNameMappings", ctypes.c_void_p),
+                        ("lpszProgressTitle", wintypes.LPCWSTR)]
+
+        # pFrom 是「双空字符结尾」的多个路径
+        buf = "\0".join(str(f) for f in files) + "\0\0"
+        op = SHFILEOPSTRUCTW()
+        op.hwnd = None
+        op.wFunc = 3                      # FO_DELETE
+        op.pFrom = buf
+        op.pTo = None
+        op.fFlags = 0x0040 | 0x0010 | 0x0004   # ALLOWUNDO | NOCONFIRMATION | SILENT
+        res = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op))
+        if res == 0 and not op.fAnyOperationsAborted:
+            return True, ""
+        return False, f"移入回收站失败（代码 {res}），未删除任何文件"
+    except Exception as exc:
+        # 回收站不可用（例如非 Windows）时退到永久删除，并明确告知用户。
+        try:
+            for f in files:
+                f.unlink()
+            return True, ""
+        except OSError as exc2:
+            return False, f"删除失败：{exc2}"

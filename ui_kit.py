@@ -133,6 +133,74 @@ def style_menu(menu):
         pass
 
 
+def attach_text_menu(text, extra=None, on_menu=None):
+    """给只读 Text 挂右键菜单：复制选中 / 全选（可选再追加条目）。
+
+    为什么要它：正文默认只读（state="disabled"），Ctrl+C 其实一直是能用的，
+    但**右键什么都不出**——用户的第一反应就是右键，摸不到菜单就等于不能复制。
+    这里只提供复制相关的几项，不改只读属性，也不接管左键（选区仍然照常工作）。
+
+    extra: [(label, callback)]，追加在分隔线之后（例如「修正译文」）。
+    on_menu: 菜单弹出前调用，可用来按当下状态启用/禁用条目。
+    """
+    menu = tk.Menu(text, tearoff=0)
+    style_menu(menu)
+
+    def selection():
+        try:
+            return text.get("sel.first", "sel.last")
+        except tk.TclError:
+            return ""
+
+    def copy_selection():
+        value = selection()
+        if not value:
+            return
+        text.clipboard_clear()
+        text.clipboard_append(value)
+
+    def copy_all():
+        try:
+            value = text.get("1.0", "end-1c")
+        except tk.TclError:
+            return
+        if value:
+            text.clipboard_clear()
+            text.clipboard_append(value)
+
+    def select_all():
+        # 只读态也能建选区，所以「全选」后按 Ctrl+C 或再右键复制都行
+        text.tag_add("sel", "1.0", "end-1c")
+
+    state = {"sel": ""}
+
+    def refresh():
+        state["sel"] = selection()
+        menu.entryconfigure(0, state="normal" if state["sel"] else "disabled")
+        if on_menu is not None:
+            on_menu(menu)
+
+    menu.add_command(label="复制", command=copy_selection)
+    menu.add_command(label="全选", command=select_all)
+    menu.add_command(label="复制全部", command=copy_all)
+    if extra:
+        menu.add_separator()
+        for label, callback in extra:
+            menu.add_command(label=label, command=callback)
+
+    def popup(event):
+        refresh()
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+        return "break"
+
+    text.bind("<Button-3>", popup, add="+")
+    text._copy_menu = menu          # 便于测试与外部追加条目
+    return menu
+
+
 def _parent_bg(w) -> str:
     try:
         return w.cget("bg")

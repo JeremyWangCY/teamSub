@@ -74,11 +74,9 @@ def open_settings(self):
         tb=tk.Frame(right,bg=W);tb.pack(anchor='w',pady=(8,10))
         header=tk.Frame(right,bg=W);header.pack(fill='x',pady=(0,4))
         lab(header,'会议背景').pack(side='left')
-        lab(header,'（写清领域与惯用说法，模型据此理解上下文）').pack(side='left')
         t_brief=UK.RoundedText(right,lines=4,bg=W);t_brief.pack(fill='both',expand=True)
         terms_header=tk.Frame(right,bg=W);terms_header.pack(fill='x',pady=(10,4))
         lab(terms_header,'译名对照').pack(side='left')
-        lab(terms_header,'（每行 term=译名；留空则只靠背景说明）').pack(side='left')
         t_gloss=UK.RoundedText(right,lines=4,bg=W);t_gloss.pack(fill='both',expand=True)
 
         pairs=[('上文条数','ctx',self.tcfg.context_n),('句末等待 ms','sent',self.tcfg.sentence_end_grace_ms),

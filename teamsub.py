@@ -59,8 +59,24 @@ except Exception as e:  # pragma: no cover
     raise
 
 APP_DIR = Path(__file__).resolve().parent
+
+# 版本号：用户来报问题时第一句总是「你用的哪个版本」，得有个地方能自报。
+# 常量放在模块顶层（而不是 pyproject/打包元数据里），是为了让源码运行、
+# 冻结成 exe 两种方式读到的都是同一个值。
+APP_DISPLAY_NAME = "TeamsSub"
+APP_VERSION = "0.1.0"
+
 CAPTION_DIR = Path(os.environ.get("TEAMSSUB_DATA_DIR", APP_DIR)) / "captions"
 CAPTION_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def data_dir():
+    """数据根目录：字幕、配置、日志都在它下面。
+
+    每次现读环境变量，和 _error_path() 保持同一套隔离语义——测试把
+    TEAMSSUB_DATA_DIR 指到临时目录后，这里也必须跟着走。
+    """
+    return Path(os.environ.get("TEAMSSUB_DATA_DIR", APP_DIR))
 
 
 # ----------------------------------------------------------------------------
@@ -120,6 +136,31 @@ CLOSE_POLL_MS = 80           # 后台等待时的轮询间隔
 # cache/error.log：下次再遇到静默退出，能直接看到死在哪一行，而不是只能猜。
 ERROR_LOG = APP_DIR / "cache" / "error.log"
 
+# 日志轮转：这个文件是「一直在」的，但一个跑几个月不重启的进程会把它攒成几十
+# MB —— 悄悄吃掉用户磁盘，真出问题时还得先翻过一堆历史才能看到这次。留 1 份
+# 历史就够对比「这次」和「上次」，再老的没有诊断价值；两份封顶约 2 MB，比任何
+# 用户会去手动清理的规模都小。刻意不用 logging.handlers：为了封个顶引一套配置
+# 体系不划算，几行 os.replace 足够。
+ERROR_LOG_MAX_BYTES = 1024 * 1024
+
+
+def _rotate_error_log(path):
+    """超过上限就把 error.log 滚成 error.log.1（只留 1 份）。
+
+    尽力而为：任何失败都咽掉，让调用方继续往当前文件追加。最典型的失败是
+    error.log.1 正被别的进程读着/占用（Windows 上 os.replace 会 PermissionError），
+    其次是磁盘满。这时宁可日志无上限地再长一会儿，也不能把正在出错的主流程
+    再崩一次——日志是排障工具，工具本身不该成为新的故障源。
+    """
+    try:
+        if path.stat().st_size < ERROR_LOG_MAX_BYTES:
+            return
+        backup = path.with_name(path.name + ".1")
+        os.replace(path, backup)          # 备份已存在时会被整体覆盖，天然只留 1 份
+    except Exception:
+        pass
+
+
 # 当前会话登记：正常退出时删除。它存在 = 上次没走完关闭流程（崩溃、断电、
 # 被任务管理器结束）。字幕本身已逐条落盘，缺的只是「让人知道去哪找」。
 SESSION_STAMP = APP_DIR / "cache" / "session.json"
@@ -143,6 +184,7 @@ def log_exception(exc_type, exc, tb, note=""):
     try:
         path = _error_path()
         path.parent.mkdir(parents=True, exist_ok=True)
+        _rotate_error_log(path)
         with path.open("a", encoding="utf-8") as f:
             f.write("\n===== %s %s =====\n"
                     % (time.strftime("%Y-%m-%d %H:%M:%S"), note).replace("  =", " ="))
@@ -157,6 +199,7 @@ def log_note(text):
     try:
         path = _error_path()
         path.parent.mkdir(parents=True, exist_ok=True)
+        _rotate_error_log(path)
         with path.open("a", encoding="utf-8") as f:
             f.write("%s %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), text))
     except Exception:
@@ -1060,27 +1103,13 @@ class App:
         self._sheet_title, self._sheet_builder = title, builder
         self._sync_nav(title)
         self._sheet_open = True
-        self.sheet_layer.place(relx=0, rely=0, relwidth=1, relheight=1)
+        # 直接把层放到位，不做位移动画：整层上下滑 8px 时，最上方的标题
+        # 跳动最明显，看起来像「点开时标题闪了一下」。层切换本来就足够
+        # 明确（旧层被换掉、导航高亮变化），位移动画只带来视觉噪声。
+        self.sheet_layer.place(relx=0, rely=0, relwidth=1, relheight=1, y=0)
         self.sheet_layer.lift()
         self._render_sheet(title, builder)
-        self._slide_in()
 
-    def _slide_in(self):
-        """层推入的克制动效：8px 上滑，约 64ms，四帧。"""
-        layer, root = self.sheet_layer, self.root
-        gen = getattr(self, "_slide_gen", 0) + 1
-        self._slide_gen = gen
-
-        def step(i=0):
-            if gen != self._slide_gen or not self._sheet_open:
-                return
-            layer.place_configure(y=int(-8 * (1 - i / 3)))
-            if i < 3:
-                root.after(16, step, i + 1)
-            else:
-                layer.place_configure(y=0)
-
-        step()
 
     def _render_sheet(self, title, builder):
         layer = self.sheet_layer
@@ -1992,7 +2021,11 @@ class App:
 
 
     def on_right_click(self, e):
-        """右键译文行 → 修正译法，保存到当前会议记录。"""
+        """右键：点中译文行可修正译法；其余位置弹复制菜单。
+
+        正文是只读的，Ctrl+C 一直能复制，但右键什么都不出会让人觉得不能复制。
+        所以命中译文时保留原来的「修正」，没命中就让复制菜单出来。
+        """
         base = self.txt.index(f"@{e.x},{e.y}")
         for off in ("", "+1c", "-1c"):
             try:
@@ -2003,6 +2036,7 @@ class App:
                 if tag.startswith("trrec") and tag[5:].isdigit():
                     self.open_edit(int(tag[5:]))
                     return "break"
+        return None                 # 落到 ui_kit 挂的复制菜单
 
     def open_edit(self, rid):
         if not (0 <= rid < len(self.records)):
@@ -2285,27 +2319,54 @@ class App:
         frontend_views.open_export(self, initial_format='srt')
 
     def show_help(self):
+        """帮助：一屏放完的快捷键/操作表。
+
+        旧版把每节写成一句句长文案堆在 Label 里，窗口一小就要滚动，而且
+        读起来像说明书。这里改成「操作 → 效果」两列表格：不滚、不堆、
+        一眼能找到要按哪个键。
+        """
         import frontend_views as FV
         def build(parent):
             b = FV.card(parent)
+            head = tk.Label(b, bg=UK.C.N0, fg=UK.C.SUB, font=UK.F_MINI,
+                            anchor='w', justify='left')
+            head.pack(fill='x')
+            head.configure(text=f"{APP_DISPLAY_NAME} v{APP_VERSION} · {data_dir()}",
+                           wraplength=680)
             tabs = tk.Frame(b, bg=UK.C.N0)
-            tabs.pack(anchor='w', pady=(0,20))
-            text = tk.Label(b, bg=UK.C.N0, fg=UK.C.TEXT, font=UK.F_UI, justify='left', anchor='nw')
-            text.pack(fill='both',expand=True)
-            topics = {
-                '采集': '在会议软件中开启实时字幕。\n\n清屏：隐藏显示，保留记录。\n新建：保存当前会议并开始独立记录。\n结束：保存并暂停采集。',
-                '导出': 'Ctrl+E：导出整场已记录内容。\n搜索和发言人筛选不影响整场导出。\n\n补译后导出会调用当前翻译服务，需确认。\nSRT 使用采集相对时间；未知时间需选择阅读时间轴。',
-                '历史': '历史浏览不影响实时采集。\n\nCtrl 多选：按列表顺序合并导出，保留来源。\n续接：将所选会议设为当前记录。\n旧版 Markdown 的缺失时间保留为未知。',
-                '操作': 'Ctrl+F：搜索\nCtrl+L：清屏\nEscape：返回\n\n点击失败译文重试；右键译文修正。\n置顶和悬浮窗位于更多菜单。'}
-            buttons=[]
+            tabs.pack(anchor='w', pady=(10, 12))
+            grid = tk.Frame(b, bg=UK.C.N0)
+            grid.pack(fill='both', expand=True)
+            grid.columnconfigure(1, weight=1)
+            rows = {
+                '采集': [('Ctrl+E', '导出整场记录'), ('点「清屏」', '只隐藏显示，记录保留'),
+                         ('点「新建」', '归档当前会议并开始新记录'), ('点「结束」', '归档并暂停采集')],
+                '导出': [('Markdown / 纯文本', '整场记录，不受搜索和筛选影响'),
+                         ('双语 SRT', '按采集相对时间；未知时间会让你选阅读时间轴'),
+                         ('补译后导出', '会调用当前翻译服务，先确认再开始')],
+                '历史': [('Ctrl 多选', '按列表顺序合并导出，保留来源'), ('续接', '把所选会议设为当前记录'),
+                         ('删除', '移入系统回收站，可还原'), ('旧版 Markdown', '缺时间的一律记为未知')],
+                '操作': [('Ctrl+F', '搜索'), ('Ctrl+L', '清屏'), ('Escape', '返回上一层'),
+                         ('点失败译文', '重试该条'), ('右键译文', '修正译法'),
+                         ('右键正文', '复制 / 全选'), ('更多菜单', '置顶、悬浮窗、导出')]}
+            buttons = []
+            holder = {}
+
             def select(key):
-                text.configure(text=topics[key])
-                for name,btn in buttons:
-                    btn.set_kind('selected' if name==key else 'tab')
-            for key in topics:
-                btn=UK.Pill(tabs,key,lambda key=key:select(key),kind='tab',bg=UK.C.N0)
-                btn.pack(side='left',padx=(0,8));buttons.append((key,btn))
-            b.bind('<Configure>',lambda e:text.configure(wraplength=max(200,e.width-10)))
+                for w in grid.winfo_children():
+                    w.destroy()
+                for r, (how, what) in enumerate(rows[key]):
+                    tk.Label(grid, text=how, bg=UK.C.N0, fg=UK.C.TEXT, font=UK.F_UI,
+                             anchor='w').grid(row=r, column=0, sticky='w', pady=3)
+                    tk.Label(grid, text=what, bg=UK.C.N0, fg=UK.C.SUB, font=UK.F_UI,
+                             anchor='w', justify='left').grid(row=r, column=1, sticky='w', padx=(18, 0), pady=3)
+                for name, btn in buttons:
+                    btn.set_kind('selected' if name == key else 'tab')
+            for key in rows:
+                btn = UK.Pill(tabs, key, lambda key=key: select(key), kind='tab', bg=UK.C.N0)
+                btn.pack(side='left', padx=(0, 8))
+                buttons.append((key, btn))
+            b.bind('<Configure>', lambda e: head.configure(wraplength=max(200, e.width - 10)))
             select('采集')
         self._show_sheet('帮助', build)
 

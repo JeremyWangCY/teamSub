@@ -31,9 +31,11 @@ py -3.12 -m venv .venv
 装了 PyInstaller 后直接运行 `build_exe.bat`，产物在 `dist\TeamsSub.exe`（约 25 MB，无需安装 Python）。
 
 ```powershell
-.\.venv\Scripts\python.exe -m pip install pyinstaller
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
 .\build_exe.bat
 ```
+
+打包脚本结束时打印产物 SHA256，便于核对。exe 带版本元数据（属性 → 详细信息里能看到产品名与版本）。
 
 单文件模式首次启动会先解压到临时目录（约 2–5 秒），之后快一些。**配置、会议记录、日志都保存在 exe 同目录**，所以要给它一个固定的文件夹，不要放在临时目录里跑。
 

@@ -133,6 +133,39 @@ def _install_variable_guard():
 _install_variable_guard()
 
 
+def _cleanup_stale_mei_dirs(max_age_seconds=3 * 86400):
+    """清掉被杀软/强杀留下的 PyInstaller 解压目录。
+
+    单文件 exe 每次启动都把自身解压到临时目录的 _MEIxxxx，正常退出会自动删。
+    但被任务管理器强杀、或关机时进程被硬终止，那个目录就留下了（几十 MB）。
+    用户不会去清 %TEMP%，几次之后就白占几百 MB 磁盘。
+
+    只在冻结模式跑，只删**超过 max_age_seconds 的天**的目录：太新的可能属于
+    另一个正在运行的实例，误删会让它崩掉。全程 try/except —— 清理失败绝不该
+    影响启动。
+    """
+    if not getattr(sys, "frozen", False):
+        return
+    import shutil
+    import tempfile
+    meipass = getattr(sys, "_MEIPASS", None)
+    try:
+        cutoff = time.time() - max_age_seconds
+        for entry in Path(tempfile.gettempdir()).glob("_MEI*"):
+            if not entry.is_dir():
+                continue
+            if meipass and str(entry) == str(meipass):
+                continue                      # 自己这份，别删
+            try:
+                if entry.stat().st_mtime >= cutoff:
+                    continue                  # 可能是别人正在用的
+                shutil.rmtree(entry, ignore_errors=True)
+            except OSError:
+                continue
+    except Exception:
+        pass
+
+
 # ----------------------------------------------------------------------------
 # 退出预算
 # ----------------------------------------------------------------------------
@@ -3168,6 +3201,7 @@ def _acquire_single_instance() -> bool:
 def main():
     if not _acquire_single_instance():
         return
+    _cleanup_stale_mei_dirs()      # 先清残留，再启动（不影响本次运行）
     _write_instance_file()
     root = tk.Tk()
     install_crash_log(root)

@@ -58,7 +58,27 @@ except Exception as e:  # pragma: no cover
     print("缺少依赖 uiautomation：", e)
     raise
 
-APP_DIR = Path(__file__).resolve().parent
+def _app_dir() -> Path:
+    """用户数据放哪：exe 旁边；源码运行时放脚本旁边。
+
+    冻结成单文件 exe 时，``__file__`` 指向临时解压目录（每次启动都不同、退出
+    即删）。若还按 ``__file__`` 定位，配置、会议记录、日志会全部写进那个临时
+    目录——用户关一次软件，记录就没了。所以数据目录一律跟着 exe 走。
+    """
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+def _resource_dir() -> Path:
+    """打包进 exe 的只读资源（图标等）在哪：单文件模式下是解压目录。"""
+    if getattr(sys, "frozen", False):
+        return Path(getattr(sys, "_MEIPASS", _app_dir()))
+    return Path(__file__).resolve().parent
+
+
+APP_DIR = _app_dir()          # 用户数据（配置/记录/缓存/日志）
+RESOURCE_DIR = _resource_dir()  # 只读资源（随 exe 打包）
 
 # 版本号：用户来报问题时第一句总是「你用的哪个版本」，得有个地方能自报。
 # 常量放在模块顶层（而不是 pyproject/打包元数据里），是为了让源码运行、
@@ -3012,7 +3032,7 @@ def _sources_newer_than(pid: int) -> bool:
         return False
     newest = 0.0
     try:
-        for path in APP_DIR.glob("*.py"):
+        for path in RESOURCE_DIR.glob("*.py"):
             try:
                 newest = max(newest, path.stat().st_mtime)
             except OSError:
@@ -3152,14 +3172,14 @@ def main():
     root = tk.Tk()
     install_crash_log(root)
     try:
-        root.iconbitmap(default=str(APP_DIR / "teamsub.ico"))
+        root.iconbitmap(default=str(RESOURCE_DIR / "teamsub.ico"))
     except Exception:
         pass
     try:
         app = App(root)
         if tray_mod is not None:
             try:
-                tray = tray_mod.TrayIcon(APP_DIR / "teamsub.ico")
+                tray = tray_mod.TrayIcon(RESOURCE_DIR / "teamsub.ico")
                 if tray.start():
                     app.attach_tray(tray)
                 else:

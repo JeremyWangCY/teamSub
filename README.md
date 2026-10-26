@@ -26,6 +26,17 @@ py -3.12 -m venv .venv
 
 排查启动问题时用 `debug.bat`，它会保留控制台输出。
 
+## 打包成单个 exe
+
+装了 PyInstaller 后直接运行 `build_exe.bat`，产物在 `dist\TeamsSub.exe`（约 25 MB，无需安装 Python）。
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install pyinstaller
+.\build_exe.bat
+```
+
+单文件模式首次启动会先解压到临时目录（约 2–5 秒），之后快一些。**配置、会议记录、日志都保存在 exe 同目录**，所以要给它一个固定的文件夹，不要放在临时目录里跑。
+
 ## 使用
 
 1. 在会议客户端里先打开实时字幕（Teams：更多 → 语言和语音 → 打开实时字幕）。

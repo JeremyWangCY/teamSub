@@ -26,7 +26,19 @@ import urllib.request
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-APP_DIR = Path(__file__).resolve().parent
+def _data_home() -> Path:
+    """配置放哪：冻结成 exe 时跟 exe 走，源码运行时跟脚本走。
+
+    单文件 exe 的 ``__file__`` 在临时解压目录里（退出即删），照它存配置等于
+    每次启动都恢复默认设置。
+    """
+    import sys
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+APP_DIR = _data_home()
 DATA_DIR = Path(os.environ.get("TEAMSSUB_DATA_DIR", APP_DIR))
 CONFIG_PATH = DATA_DIR / "appconfig.json"
 

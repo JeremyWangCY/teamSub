@@ -23,6 +23,11 @@ cache/
 instance.pid
 session.json
 
+# ---- 打包产物（build_exe.bat 生成，不入库）----
+build/
+dist/
+*.spec
+
 # ---- 截图与临时产物 ----
 *.png
 *.tmp

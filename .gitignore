@@ -1,0 +1,35 @@
+# ---- Python ----
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# ---- 本机配置与密钥（绝不提交）----
+appconfig.json
+appconfig.local.json
+*.local.json
+.env
+.env.*
+
+# ---- 会议记录与运行时产物（隐私 + 垃圾）----
+captions/
+cache/
+*.sqlite3
+*.sqlite3-journal
+*.db
+*.log
+*.pid
+instance.pid
+session.json
+
+# ---- 截图与临时产物 ----
+*.png
+*.tmp
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store

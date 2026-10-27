@@ -241,7 +241,7 @@ def _recycle(files):
 
     优先用 SHFileOperationW(FOF_ALLOWUNDO|FOF_NOCONFIRMATION|FOF_SILENT)，
     它在资源管理器层面「删除」，用户能从回收站还原。
-    非 Windows 或调用失败时退回 os.unlink（永久删除），但要如实告知。
+    回收站不可用时报告失败，绝不退回永久删除。
     """
     files = [Path(f) for f in files]
     if not files:
@@ -271,12 +271,7 @@ def _recycle(files):
         res = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op))
         if res == 0 and not op.fAnyOperationsAborted:
             return True, ""
-        return False, f"移入回收站失败（代码 {res}），未删除任何文件"
+        return False, f"移入回收站未完成（代码 {res}），请刷新列表核对文件状态"
     except Exception as exc:
-        # 回收站不可用（例如非 Windows）时退到永久删除，并明确告知用户。
-        try:
-            for f in files:
-                f.unlink()
-            return True, ""
-        except OSError as exc2:
-            return False, f"删除失败：{exc2}"
+        # 可恢复删除失败时必须停下，不能把用户同意的操作升级为永久删除。
+        return False, f"无法移入回收站，已停止删除：{exc}"

@@ -96,67 +96,7 @@ def open_settings(self):
         t_gloss=UK.RoundedText(edits,lines=2,bg=W)
         t_gloss.grid(row=2,column=0,sticky='nsew')
 
-        def fit_editors(_event=None):
-            """两框等高由 grid 权重保证；这里只负责把实际像素高度同步给控件。
-
-            RoundedText 关掉了尺寸传播、靠 self.h 决定可见高，所以 grid 分给它的
-            格子变高之后要回写一次高度，否则它仍按初始 2 行画。
-            """
-            try:
-                if not edits.winfo_ismapped():
-                    topic_page.after(30, fit_editors)
-                    return
-                each = max(t_brief.lh * 2 + 20, t_brief.winfo_height())
-                for box in (t_brief, t_gloss):
-                    if box.h != each:
-                        box.configure(height=each)
-                        box.h = each
-            except Exception:
-                pass
-        t_brief.bind('<Configure>', fit_editors, add='+')
-        t_gloss.bind('<Configure>', fit_editors, add='+')
-
-        def fit_editors(_event=None):
-            """把两个输入框严格平分可用高度，且各自不低于 2 整行。
-
-            两个坑：
-            1. 高度口径要和 RoundedText 内部一致（``lines*lh + 20``）。早先这里
-               少算 4px，于是「2 行」实际只画出 1.35 行。
-            2. ``<Configure>`` 可能在容器还没有真实尺寸时就触发，此时算出来的
-               avail 偏大（首绘出现 72/51 不对称）。所以先要求真实尺寸，没有就
-               推迟到下一次事件循环再算。
-            """
-            try:
-                if not edits.winfo_ismapped():
-                    # 页面还没显示出来，尺寸都是 1x1，等它 Map 之后再算
-                    topic_page.after(30, fit_editors)
-                    return
-                # 右栏总高扣掉固定部分（名称框、按钮行、两个标题行），剩下的
-                # 才分给两个输入框。用宿主 right 的高度来算，而不是 edits——
-                # edits 的高度本身由内容决定，拿它算会导致自我循环。
-                fixed = (e_tname.winfo_reqheight() + tb.winfo_reqheight()
-                         + header.winfo_reqheight()
-                         + terms_header.winfo_reqheight() + 34)
-                avail = right.winfo_height() - fixed
-                if avail < 60:
-                    return
-                two_lines = t_brief.lh * 2 + 20      # 与 RoundedText 同口径
-                # 两框必须**同一高度**：一个 66 一个 57 的观感比整体矮一点更糟
-                each = max(two_lines, avail // 2)
-                for box in (t_brief, t_gloss):
-                    if box.h != each:
-                        box.configure(height=each)
-                        box.h = each
-            except Exception:
-                pass
-        def settle(_e=None):
-            # 连跑几拍：切页签瞬间 right 还是 1x1，等布局稳定后再算才准。
-            for delay in (0, 30, 90, 200):
-                topic_page.after(delay, fit_editors)
-        edits.bind('<Configure>', fit_editors)
-        right.bind('<Configure>', fit_editors, add='+')
-        topic_page.bind('<Map>', settle, add='+')
-        settle()
+        # 等高分配由 grid 的 uniform 行完成，无需定时校准或回写请求高度。
 
         pairs=[('上文条数','ctx',self.tcfg.context_n),('句末等待 ms','sent',self.tcfg.sentence_end_grace_ms),
                ('兜底等待 ms','settle',self.tcfg.settle_ms),('批量条数','batch',self.tcfg.batch_size),

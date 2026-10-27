@@ -167,6 +167,42 @@ def save_edits(path, updates):
     rewrite_markdown(path)
     return written
 
+def translation_unchanged(record, expected):
+    def status(rec):
+        value = rec.get('tr_status')
+        return 'none' if value == 'pending' else value
+    return (all(record.get(key) == expected.get(key) for key in ('text', 'tr'))
+            and status(record) == status(expected))
+
+
+def save_translations(path, results):
+    """Only fill unchanged, untranslated records; never replace a later edit."""
+    if not editable(path):
+        raise PermissionError('旧版 Markdown 记录请先续接并另存为新版会议')
+    applied = {}
+    db = sqlite3.connect(str(Path(path).with_suffix('.sqlite3')), timeout=5)
+    try:
+        with db:
+            db.execute('BEGIN IMMEDIATE')
+            for rid, (expected, fields) in results.items():
+                row = db.execute('SELECT payload FROM captions WHERE id = ?', (rid,)).fetchone()
+                if row is None:
+                    continue
+                record = json.loads(row[0])
+                if not translation_unchanged(record, expected):
+                    continue
+                if record.get('tr_status') == 'skip' or (
+                        record.get('tr_status') == 'ok' and record.get('tr')):
+                    continue
+                record.update(fields)
+                db.execute('UPDATE captions SET payload = ? WHERE id = ?',
+                           (json.dumps(record, ensure_ascii=False), rid))
+                applied[rid] = fields
+        return applied
+    finally:
+        db.close()
+
+
 def session_files(path):
     """一场会议在磁盘上占用的所有文件（.sqlite3 与 .md 成对出现）。
 

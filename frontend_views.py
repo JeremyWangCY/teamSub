@@ -1,15 +1,13 @@
 """History, reading preferences and export flows, independent from live capture."""
-import copy
 import os
 from pathlib import Path
-import queue
-import threading
 import time
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import ui_kit as UK
 import meeting_export as ME
 import meeting_repository as MR
+import meeting_translation as MT
 
 
 def label(parent, text, *, small=False):
@@ -43,10 +41,10 @@ def open_export(app, records=None, title=None, initial_format='md'):
         scope = UK.Select(row, ['整场会议', '当前筛选结果'] if live else ['所选历史记录'],
                           value='整场会议' if live else '所选历史记录', width=170, bg=UK.C.N0)
         scope.pack(side='left')
-        fmt = UK.Select(row, ['Markdown', 'TXT 纯文本', 'SRT 双语字幕'],
-                        value={'md':'Markdown', 'txt':'TXT 纯文本', 'srt':'SRT 双语字幕'}[initial_format], width=160, bg=UK.C.N0)
+        fmt = UK.Select(row, ['Markdown', 'TXT 纯文本', 'SRT 字幕'],
+                        value={'md':'Markdown', 'txt':'TXT 纯文本', 'srt':'SRT 字幕'}[initial_format], width=160, bg=UK.C.N0)
         fmt.pack(side='left', padx=12)
-        content = UK.Select(row, ['原文 + 译文', '仅原文', '仅译文'], value='原文 + 译文', width=150, bg=UK.C.N0)
+        content = UK.Select(row, ['原文', '译文', '对照'], value='对照', width=150, bg=UK.C.N0)
         content.pack(side='left')
         choices = tk.Frame(b, bg=UK.C.N0)
         choices.pack(fill='x', pady=8)
@@ -72,14 +70,13 @@ def open_export(app, records=None, title=None, initial_format='md'):
         open_row = tk.Frame(actions, bg=UK.C.N50)
         open_row.pack(side='left')
         state = {'signature': None, 'busy':False}
-        cancel = threading.Event()
 
         def selected():
             return current if live and scope.get() == '当前筛选结果' else frozen
 
         def options():
-            return ME.ExportOptions({'Markdown':'md', 'TXT 纯文本':'txt', 'SRT 双语字幕':'srt'}[fmt.get()],
-                {'原文 + 译文':'both', '仅原文':'source', '仅译文':'translation'}[content.get()],
+            return ME.ExportOptions({'Markdown':'md', 'TXT 纯文本':'txt', 'SRT 字幕':'srt'}[fmt.get()],
+                {'原文':'source', '译文':'translation', '对照':'both'}[content.get()],
                 name.get(), stamp.get(), synthetic.get())
 
         def update():
@@ -140,84 +137,15 @@ def open_export(app, records=None, title=None, initial_format='md'):
                     result.configure(text='导出失败：'+str(exc), fg=UK.C.RED)
             app.background(lambda: ME.write_export(path, title, recs, opt), done, failed)
 
-        def export_now(translate=False):
+        def export_now():
             if state['busy']:
                 return
-            recs, opt = ME.snapshot(selected()), options()
-            if not translate or opt.content == 'source' or not ME.missing_translation(recs):
-                state['busy'] = True
-                save(recs, opt)
-                return
-            if not app._has_credentials():
-                result.configure(text='请先在设置中配置翻译服务。', fg=UK.C.RED)
-                return
-            if not messagebox.askyesno('补译后导出', f'将为这份快照补译 {ME.missing_translation(recs)} 条。\n使用当前服务与主题，可能产生 API 费用，是否继续？', parent=app.root):
-                return
             state['busy'] = True
-            cancel_button.pack(side='left',before=open_row,padx=(0,10))
-            cancel.clear()
-            app._export_jobs.append(cancel)
-            cfg = copy.deepcopy(app.tcfg)
-            result.configure(text='补译中，可取消；实时采集继续。', fg=UK.C.SUB)
-            def translate_snapshot():
-                from translator import TranslationService
-                replies = queue.Queue()
-                svc = TranslationService(cfg, lambda i, text, meta: replies.put((i,text,meta)))
-                try:
-                    svc.start()
-                    todo = [i for i,r in enumerate(recs) if ME.missing_translation([r])]
-                    for i in todo:
-                        if cancel.is_set():
-                            raise RuntimeError('已取消补译；可直接导出已有内容。')
-                        svc.submit(i, recs[i]['text'], context=[x['text'] for x in recs[max(0,i-cfg.context_n):i]])
-                    remaining, last_reply = set(todo), time.monotonic()
-                    while remaining:
-                        if cancel.is_set():
-                            raise RuntimeError('已取消补译；可直接导出已有内容。')
-                        try:
-                            i,text,meta = replies.get(timeout=.25)
-                        except queue.Empty:
-                            if time.monotonic()-last_reply > 180:
-                                raise RuntimeError('补译等待超时；可导出已有内容。')
-                            continue
-                        if i not in remaining:
-                            continue
-                        remaining.remove(i)
-                        last_reply = time.monotonic()
-                        recs[i].update(tr=text, tr_status=meta.get('status','fail'))
-                    return recs
-                finally:
-                    svc.stop()
-                    for worker in svc.threads:
-                        worker.join(2)
-            def ready(translated):
-                if cancel_button.winfo_exists():
-                    cancel_button.pack_forget()
-                if cancel in app._export_jobs:
-                    app._export_jobs.remove(cancel)
-                if not b.winfo_exists():
-                    state['busy'] = False
-                    return
-                failures = ME.missing_translation(translated)
-                if failures and not messagebox.askyesno('部分补译未完成', f'仍有 {failures} 条未完成，是否导出当前结果？', parent=app.root):
-                    state['busy'] = False
-                    return
-                save(translated, opt)
-            def failed(exc):
-                state['busy'] = False
-                if cancel_button.winfo_exists():
-                    cancel_button.pack_forget()
-                if cancel in app._export_jobs:
-                    app._export_jobs.remove(cancel)
-                if b.winfo_exists():
-                    result.configure(text=str(exc), fg=UK.C.RED)
-            app.background(translate_snapshot, ready, failed)
-        UK.Pill(actions, '导出已有内容', export_now, kind='primary', height=36).pack(side='right')
-        UK.Pill(actions, '补译后导出', lambda: export_now(True), kind='tint', height=36).pack(side='right', padx=12)
-        cancel_button = UK.Pill(actions, '取消补译', cancel.set, kind='ghost')
-        b.bind('<Destroy>', lambda e: cancel.set() if e.widget is b else None, add='+')
+            save(ME.snapshot(selected()), options())
+
+        UK.Pill(actions, '导出', export_now, kind='primary', height=36).pack(side='right')
         update()
-    app._show_sheet('导出会议', build)
+    app._show_sheet('导出会议', build, push=not live)
 
 
 def open_history(app):
@@ -285,6 +213,9 @@ def open_history(app):
             sessions = selected()
             if not sessions:
                 status.configure(text='请先选择要删除的会议记录。')
+                return
+            if any(MT.active_job(app, s.path) for s in sessions):
+                status.configure(text='所选会议正在补译，请先在会议记录里取消补译。')
                 return
             names = '、'.join(s.title for s in sessions[:3])
             if len(sessions) > 3:
@@ -359,6 +290,7 @@ def view_history(app, session, records):
     # 都得从这里恢复，不能活在 build 的局部变量里
     state = {'records': records, 'page': 0, 'query': '', 'editing': False,
              'display': getattr(app, 'display_mode', 'both'), 'dirty': 0}
+    key = MT.job_key(session.path)
 
     def shown():
         return ME.filtered(state['records'], None, state['query'])
@@ -465,6 +397,9 @@ def view_history(app, session, records):
             paint(reset_scroll=True)
 
         def toggle_edit():
+            if MT.active_job(app, session.path):
+                app._notice('补译正在保存记录，请完成或取消补译后再编辑。')
+                return
             if session.legacy or not MR.editable(session.path):
                 app._notice('这份记录是旧版 Markdown 文件，没有数据库可比对，暂时只读。\n'
                             '可以在实时会议里用「续接该会议」另存为新版后再编辑。')
@@ -483,6 +418,34 @@ def view_history(app, session, records):
                     toggle_edit,
                     kind='tint' if state['editing'] else 'ghost').pack(
                         side='right', padx=(0, 10))
+            UK.Pill(actions, '取消补译' if MT.active_job(app, session.path) else '补译',
+                    backfill, kind='tint').pack(side='right', padx=(0, 10))
+
+        def backfill():
+            job = MT.active_job(app, session.path)
+            if job:
+                job.cancel.set()
+                return
+            if not MR.editable(session.path):
+                progress.configure(text='旧版 Markdown 请先续接并另存为新版会议。', fg=UK.C.RED)
+                return
+            missing = ME.missing_translation(state['records'])
+            if not missing:
+                progress.configure(text='译文已完整。', fg=UK.C.GREEN)
+                return
+            if not app._has_credentials():
+                progress.configure(text='请先在设置中配置翻译服务。', fg=UK.C.RED)
+                return
+            if not messagebox.askyesno('补译会议记录',
+                    f'补译 {missing} 条，使用当前服务与主题，可能产生 API 费用。', parent=app.root):
+                return
+            job = MT.TranslationJob(session.path, state['records'], app.tcfg,
+                persist=lambda results, cancel: MT.persist_for_app(app, session.path, results, cancel))
+            app._translation_jobs[key] = job
+            state['editing'] = False
+            job.start()
+            rebuild_actions()
+            paint()
 
         def open_editor(index):
             chosen = state.get('chosen') or state['records']
@@ -512,6 +475,10 @@ def view_history(app, session, records):
 
         # ---------------- 底部 ----------------
         app._sheet_footer.pack(side='bottom', fill='x', padx=24, pady=(8, 12))
+        progress = tk.Label(app._sheet_footer, text='', bg=UK.C.N50,
+                            fg=UK.C.SUB, font=UK.F_MINI, anchor='w',
+                            justify='left', wraplength=720)
+        progress.pack(fill='x', pady=(0, 6))
         row = tk.Frame(app._sheet_footer, bg=UK.C.N50)
         row.pack(fill='x')
         UK.Pill(row, '上一页', lambda: turn(-1), kind='ghost').pack(side='left')
@@ -524,6 +491,43 @@ def view_history(app, session, records):
         rebuild_actions()
         readonly(True)
         paint()
+        seen = {'job': None, 'count': 0, 'done': False}
+
+        def poll_progress():
+            if not b.winfo_exists():
+                return
+            job = app._translation_jobs.get(key)
+            if job is not None:
+                if seen['job'] is not job:
+                    seen.update(job=job, count=0, done=False)
+                    seen['expected'] = {r['id']: r for r in job.records}
+                value = job.progress(seen['count'])
+                updates = dict(value['updates'])
+                if updates:
+                    state['scroll'] = txt.yview()[0]
+                    for rec in state['records']:
+                        expected = seen['expected'].get(rec['id'], {})
+                        if rec['id'] in updates and MR.translation_unchanged(rec, expected):
+                            rec.update(updates[rec['id']])
+                    seen['count'] += len(value['updates'])
+                    paint()
+                phase = '补译中'
+                if value['done']:
+                    phase = '补译停止' if value['error'] else ('补译已取消' if value['cancelled'] else '补译完成')
+                text = (f'{phase} {value["completed"]}/{value["total"]}'
+                        f' · 已保存 {value["saved"]} · 失败 {value["failed"]}')
+                if value['changed']:
+                    text += f' · 记录已变更，跳过 {value["changed"]}'
+                error = value['error'] or value['last_error']
+                if error:
+                    text += ' · ' + error[:120]
+                progress.configure(text=text, fg=UK.C.RED if error else UK.C.SUB)
+                if value['done'] and not seen['done']:
+                    seen['done'] = True
+                    rebuild_actions()
+            app.root.after(200, poll_progress)
+
+        poll_progress()
 
     app._show_sheet('会议记录', build, push=True)
 

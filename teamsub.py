@@ -84,7 +84,7 @@ RESOURCE_DIR = _resource_dir()  # 只读资源（随 exe 打包）
 # 常量放在模块顶层（而不是 pyproject/打包元数据里），是为了让源码运行、
 # 冻结成 exe 两种方式读到的都是同一个值。
 APP_DISPLAY_NAME = "TeamsSub"
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.1.1"
 
 CAPTION_DIR = Path(os.environ.get("TEAMSSUB_DATA_DIR", APP_DIR)) / "captions"
 
@@ -870,7 +870,7 @@ class App:
         self.display_mode = "both"
         self.reading_size = 12
         self.density = "comfort"
-        self._export_jobs = []
+        self._translation_jobs = {}
         self.records = []
         self.view_indices = []
         self.view_pos = {}
@@ -2411,8 +2411,9 @@ class App:
                 '采集': [('Ctrl+E', '导出整场记录'), ('点「清屏」', '只隐藏显示，记录保留'),
                          ('点「新建」', '归档当前会议并开始新记录'), ('点「结束」', '归档并暂停采集')],
                 '导出': [('Markdown / 纯文本', '整场记录，不受搜索和筛选影响'),
-                         ('双语 SRT', '按采集相对时间；未知时间会让你选阅读时间轴'),
-                         ('补译后导出', '会调用当前翻译服务，先确认再开始')],
+                         ('SRT 字幕', '按采集相对时间；未知时间会让你选阅读时间轴'),
+                         ('原文 / 译文 / 对照', '导出时选择需要的内容'),
+                         ('补译', '在会议记录里补译，译文自动保存')],
                 '历史': [('Ctrl 多选', '按列表顺序合并导出，保留来源'), ('续接', '把所选会议设为当前记录'),
                          ('删除', '移入系统回收站，可还原'), ('旧版 Markdown', '缺时间的一律记为未知')],
                 '操作': [('Ctrl+F', '搜索'), ('Ctrl+L', '清屏'), ('Escape', '返回上一层'),
@@ -2514,6 +2515,10 @@ class App:
         self._confirm('结束本次采集并保存会议？仍可导出整场内容。', end, '结束并归档', push=False)
 
     def resume_meeting(self, session):
+        from meeting_translation import active_job
+        if active_job(self, session.path):
+            self._notice('这场会议正在补译，请等待完成或先取消补译。')
+            return
         if self.save_path and Path(self.save_path).with_suffix('.sqlite3') == session.path:
             self.show_live()
             self.flash('当前已经在记录这场会议')
@@ -2771,8 +2776,8 @@ class App:
         self._closing = True
         self._quit_pending = False
         self._cancel_close_poll()
-        for cancel in getattr(self, "_export_jobs", []):
-            cancel.set()
+        for job in getattr(self, '_translation_jobs', {}).values():
+            job.cancel.set()
         try:
             self.reader.stop()
         except Exception:

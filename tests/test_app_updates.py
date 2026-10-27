@@ -50,5 +50,32 @@ class UpdateTests(unittest.TestCase):
             with self.subTest(error=type(error).__name__),patch.object(U.urllib.request,'urlopen',side_effect=error):
                 with self.assertRaises(U.UpdateCheckError):U.check_latest_release()
 
+    def test_exact_installer_and_digest_are_selected(self):
+        asset=dict(name='TeamsSub-Setup-0.1.12.exe', size=100,
+                   browser_download_url=f'{U.RELEASES_URL}/download/v0.1.12/TeamsSub-Setup-0.1.12.exe',
+                   digest='sha256:'+'AB'*32)
+        with patch.object(U.urllib.request,'urlopen',return_value=payload(assets=[asset])):
+            release=U.check_latest_release()
+        self.assertEqual(release.installer,U.InstallerAsset(asset['name'],asset['browser_download_url'],100,'ab'*32))
+
+    def test_missing_digest_or_unrelated_asset_keeps_manual_download(self):
+        for asset in (dict(name='TeamsSub-Setup-0.1.12.exe'),
+                      dict(name='TeamsSub-Setup-0.1.12.exe',digest='sha256:bad'),
+                      dict(name='another.exe',digest='sha256:'+'a'*64)):
+            with self.subTest(asset=asset),patch.object(U.urllib.request,'urlopen',return_value=payload(assets=[asset])):
+                self.assertIsNone(U.check_latest_release().installer)
+
+    def test_invalid_installer_sources_and_sizes_are_rejected(self):
+        base=dict(name='TeamsSub-Setup-0.1.12.exe',size=100,digest='sha256:'+'a'*64,
+                  browser_download_url=f'{U.RELEASES_URL}/download/v0.1.12/TeamsSub-Setup-0.1.12.exe')
+        for change in (dict(browser_download_url='https://example.com/TeamsSub-Setup-0.1.12.exe'),
+                       dict(browser_download_url=base['browser_download_url'].replace('v0.1.12/','v0.1.11/')),
+                       dict(size=True),dict(size=0),dict(size=U.MAX_INSTALLER_BYTES+1)):
+            asset=dict(base,**change)
+            with self.subTest(change=change),patch.object(U.urllib.request,'urlopen',return_value=payload(assets=[asset])):
+                with self.assertRaises(U.UpdateCheckError):U.check_latest_release()
+        with patch.object(U.urllib.request,'urlopen',return_value=payload(assets=[base,base])):
+            with self.assertRaises(U.UpdateCheckError):U.check_latest_release()
+
 
 if __name__=='__main__':unittest.main(verbosity=2)

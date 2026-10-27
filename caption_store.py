@@ -136,14 +136,16 @@ class AsyncCaptionStore:
         """
         try:
             store.write_markdown()
-            self.last_error = None
+            # 一份旧 SQLite 快照能投影成功，不代表尚未提交的记录已保存。
+            if self._db_error is None:
+                self.last_error = None
             return True
         except Exception as exc:
             self._report(exc)
             return False
 
     def _persist(self, store, batch):
-        """把一批记录写进 SQLite；失败同样不退出，只是标脏以便下次重试。"""
+        """提交全部待保存快照；调用方须保留失败批次，成功后才能清空它。"""
         try:
             store.upsert_many(batch)
             self._db_error = None
@@ -166,6 +168,11 @@ class AsyncCaptionStore:
             else:
                 store = CaptionStore(directory, title, path=existing, project_each=False)
             dirty, last = False, time.monotonic()
+            # dict 保留首次入队顺序，同 ID 则以最新快照替换。失败时不能把旧
+            # batch 放回队尾，否则它可能晚于人工编辑写入，反而覆盖新内容。
+            unwritten = {}
+            retry_after = 0.0
+            closing = False
             while True:
                 try:
                     if pending is not None:
@@ -186,17 +193,27 @@ class AsyncCaptionStore:
                             pending = (next_kind, next_payload)
                             break
                         batch.append(next_payload)
-                    if self._persist(store, batch):
+                    for item in batch:
+                        unwritten[item[0]['id']] = item
+                closing = closing or kind == 'close'
+                if unwritten and (kind in ('flush', 'close') or time.monotonic() >= retry_after):
+                    if self._persist(store, list(unwritten.values())):
+                        unwritten.clear()
                         dirty = True
-                if dirty and (time.monotonic()-last > _PROJECT_INTERVAL or kind in ('flush', 'close')):
+                    else:
+                        # 连续来字幕时也有重试间隔，避免坏盘上无限紧循环。
+                        retry_after = time.monotonic() + .25
+                if dirty and (time.monotonic()-last > _PROJECT_INTERVAL or kind == 'flush' or closing):
                     # 只有投影成功才清脏：失败后下一轮（节流期一过）会自动整份重投，
                     # 于是「磁盘恢复后 .md 自己补回来」是自愈的，不用人工干预。
                     # 没有未投影记录时 dirty 为假，收尾那次多余的 fsync 自然就省掉了。
                     dirty, last = not self._project(store), time.monotonic()
                 if kind in ('flush', 'close'):
                     payload.set()
-                if kind == 'close':
+                if closing and not unwritten:
                     break
+                # 关闭请求遇到数据库故障时仍保留线程和 unwritten，恢复后继续
+                # 写完再退出。wait_closed/close 可超时，但不能把未保存伪报成功。
         except Exception as exc:      # 兜底：连建库/取队列都炸了，写线程才真的停
             self.error = exc
             self._report(exc)
@@ -243,6 +260,8 @@ class AsyncCaptionStore:
         """旧语义：等写线程收尾，等不到就抛 TimeoutError。"""
         self.close_async()
         if not self.wait_closed(timeout):
+            if self._db_error:
+                raise RuntimeError(str(self._db_error))
             raise TimeoutError('等待自动保存结束超时')
         if self.error:
             raise RuntimeError(str(self.error))
@@ -258,8 +277,20 @@ class AsyncCaptionStore:
         """
         if self.error:
             raise RuntimeError(str(self.error))
-        if self._close_sent or not self.thread.is_alive():
-            return                    # 已在收尾 / 已结束：收尾流程自己会把数据写完
+        if self._close_sent:
+            if not self.wait_closed(timeout):
+                if self._db_error:
+                    raise RuntimeError(str(self._db_error))
+                raise TimeoutError('等待自动保存结束超时')
+            if self.error:
+                raise RuntimeError(str(self.error))
+            if self._db_error:
+                raise RuntimeError(str(self._db_error))
+            return
+        if not self.thread.is_alive():
+            if self._db_error:
+                raise RuntimeError(str(self._db_error))
+            return
         done = threading.Event()
         self.queue.put(('flush', done))
         if not done.wait(timeout):

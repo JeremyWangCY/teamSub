@@ -3,7 +3,8 @@ import os
 from pathlib import Path
 import time
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, simpledialog
+from dataclasses import replace
 import ui_kit as UK
 import meeting_export as ME
 import meeting_repository as MR
@@ -160,6 +161,35 @@ def open_export(app, records=None, title=None, initial_format=None):
     app._show_sheet('导出会议', build, push=not live)
 
 
+def rename_meeting(app, session, saved):
+    if MT.active_job(app, session.path):
+        app._notice('这场会议正在补译，请完成或取消补译后再重命名。')
+        return
+    if not MR.editable(session.path):
+        app._notice('旧版 Markdown 请先续接并另存为新版会议，再重命名。')
+        return
+    title = simpledialog.askstring('重命名会议', '会议名称：',
+                                   initialvalue=session.title, parent=app.root)
+    if title is None:
+        return
+    try:
+        title = MR.validate_title(title)
+    except ValueError as exc:
+        messagebox.showerror('重命名会议', str(exc), parent=app.root)
+        return
+    if title == session.title:
+        return
+    def done(value):
+        if app.save_path and MT.job_key(app.save_path.with_suffix('.sqlite3')) == MT.job_key(session.path):
+            app.reader.meeting_title = value
+            app._meeting_txt = '会议：' + value
+            app.lbl_meeting.configure(text=app._meeting_txt)
+        saved(replace(session, title=value))
+        app.flash('会议名称已保存')
+    app.background(lambda: MR.rename_session(session.path, title), done,
+                   lambda exc: app._notice('重命名失败：' + str(exc)))
+
+
 def open_history(app):
     from teamsub import CAPTION_DIR
     state = {'all': [], 'visible': [], 'query': '', 'selected': set(),
@@ -240,6 +270,21 @@ def open_history(app):
             app.background(load, loaded)
         def selected():
             return [state['visible'][i] for i in listing.curselection()]
+        def rename_selected():
+            sessions = selected()
+            if len(sessions) != 1:
+                status.configure(text='重命名时请选择一场会议。')
+                return
+            state['selected'] = {str(sessions[0].path)}
+            state['scroll'] = listing.yview()[0]
+            def renamed(session):
+                if not b.winfo_exists():
+                    return
+                state['all'] = [session if s.path == session.path else s for s in state['all']]
+                filter_list()
+            rename_meeting(app, sessions[0], renamed)
+        UK.Pill(search_row, '重命名', rename_selected, kind='secondary', bg=UK.C.N0).pack(side='left', padx=8)
+        listing.bind('<F2>', lambda e: rename_selected())
         def read(action):
             sessions = selected()
             if not sessions:
@@ -358,17 +403,23 @@ def view_history(app, session, records):
         # ---------------- 标题行 ----------------
         head = tk.Frame(b, bg=UK.C.N0)
         head.pack(fill='x')
+        # 先为操作预留宽度，长会议名不能把补译等按钮挤出窗口。
+        actions = tk.Frame(head, bg=UK.C.N0)
+        actions.pack(side='right', padx=(12,0), anchor='n')
         title_box = tk.Frame(head, bg=UK.C.N0)
         title_box.pack(side='left', fill='x', expand=True)
-        tk.Label(title_box, text=session.title, bg=UK.C.N0, fg=UK.C.TEXT,
+        title_label = tk.Label(title_box, text=session.title, bg=UK.C.N0, fg=UK.C.TEXT,
                  font=UK.F_HEAD, anchor='w', justify='left',
-                 wraplength=520).pack(anchor='w')
+                 wraplength=360)
+        title_label.pack(anchor='w')
         meta = tk.Label(title_box, text='', bg=UK.C.N0, fg=UK.C.T3,
-                        font=UK.F_MINI, anchor='w')
+                        font=UK.F_MINI, anchor='w', justify='left', wraplength=360)
         meta.pack(anchor='w', pady=(4, 0))
 
-        actions = tk.Frame(head, bg=UK.C.N0)
-        actions.pack(side='right')
+        def wrap_title(event):
+            title_label.configure(wraplength=max(80,event.width))
+            meta.configure(wraplength=max(80,event.width))
+        title_box.bind('<Configure>',wrap_title)
 
         # ---------------- 检索 + 显示模式 ----------------
         bar = tk.Frame(b, bg=UK.C.N0)
@@ -439,7 +490,7 @@ def view_history(app, session, records):
             readout.configure(
                 text=f'{len(chosen)} 条 · 第 {state["page"] + 1}/{total} 页'
                      + (f' · 已改 {state["dirty"]} 条' if state['dirty'] else ''))
-            meta.configure(text=f'{len(state["records"])} 条 · {session.path.name}'
+            meta.configure(text=f'{len(state["records"])} 条 · {session.started.replace("T", " ")}'
                                + (' · 旧版 Markdown（只读）' if session.legacy else ''))
 
         def pick_display(label):
@@ -476,12 +527,19 @@ def view_history(app, session, records):
             UK.Pill(actions, '导出整场记录',
                     lambda: open_export(app, state['records'], session.title),
                     kind='primary').pack(side='right')
-            UK.Pill(actions, '完成' if state['editing'] else '编辑',
+            UK.Pill(actions, '完成编辑' if state['editing'] else '编辑记录',
                     toggle_edit,
                     kind='tint' if state['editing'] else 'ghost').pack(
                         side='right', padx=(0, 10))
             UK.Pill(actions, '取消补译' if MT.active_job(app, session.path) else '补译',
                     backfill, kind='tint').pack(side='right', padx=(0, 10))
+        def renamed(value):
+            nonlocal session
+            session = value
+            if title_label.winfo_exists():
+                title_label.configure(text=session.title)
+        UK.Pill(title_box, '重命名', lambda: rename_meeting(app, session, renamed),
+                kind='ghost', bg=UK.C.N0, height=28).pack(anchor='w', pady=(2,0))
 
         def backfill():
             job = MT.active_job(app, session.path)
@@ -618,7 +676,7 @@ def edit_record(app, session, rec, state):
         b = box.body
         b.columnconfigure(0, weight=1, uniform='edit')
         b.columnconfigure(1, weight=1, uniform='edit')
-        b.rowconfigure(1, weight=1)
+        b.rowconfigure(3, weight=1)
 
         def caption(text, row, column, **kw):
             tk.Label(b, text=text, bg=UK.C.N0, fg=UK.C.SUB,
@@ -626,27 +684,27 @@ def edit_record(app, session, rec, state):
                                            **kw)
 
         caption('发言人', 0, 0, pady=(0, 8))
-        caption('原文', 1, 0, pady=(0, 10))
-        caption('译文', 1, 1, padx=(16, 0), pady=(0, 10))
+        caption('原文', 2, 0, pady=(10, 8))
+        caption('译文', 2, 1, padx=(16, 0), pady=(10, 8))
 
         name = UK.Field(b, value=rec.get('name', ''), bg=UK.C.N0)
-        name.grid(row=0, column=0, sticky='we', padx=(0, 16))
+        name.grid(row=1, column=0, sticky='we', padx=(0, 16))
 
         source = tk.Text(b, height=3, wrap='word', font=UK.F_UI, bg=UK.C.N100,
                          fg=UK.C.TEXT, bd=0, padx=12, pady=10,
                          insertbackground=UK.C.TEXT)
-        source.grid(row=2, column=0, sticky='nsew', padx=(0, 16))
+        source.grid(row=3, column=0, sticky='nsew', padx=(0, 16))
         source.insert('1.0', rec.get('text', ''))
 
         trans = tk.Text(b, height=3, wrap='word', font=UK.F_UI, bg=UK.C.N100,
                         fg=UK.C.TEXT, bd=0, padx=12, pady=10,
                         insertbackground=UK.C.TEXT)
-        trans.grid(row=2, column=1, sticky='nsew')
+        trans.grid(row=3, column=1, sticky='nsew')
         trans.insert('1.0', rec.get('tr', '') or '')
 
         status = tk.Label(b, text='', bg=UK.C.N0, fg=UK.C.T3, font=UK.F_MINI,
                           justify='left', anchor='w', wraplength=620)
-        status.grid(row=3, column=0, columnspan=2, sticky='we', pady=(10, 0))
+        status.grid(row=4, column=0, columnspan=2, sticky='we', pady=(10, 0))
 
         app._sheet_footer.pack(side='bottom', fill='x', padx=24, pady=(8, 12))
         row = tk.Frame(app._sheet_footer, bg=UK.C.N50)
@@ -673,7 +731,7 @@ def edit_record(app, session, rec, state):
                 status.configure(text='原文不能为空。', fg=UK.C.RED)
                 return
             tr = trans.get('1.0', 'end').strip()
-            fields = {'text': text, 'tr': tr,
+            fields = {'text': text, 'tr': tr, 'qa': [],
                       'tr_status': 'ok' if tr else 'none',
                       'name': name.get().strip() or rec.get('name', ''),
                       'raw': name.get().strip() or rec.get('raw', '')}
@@ -681,6 +739,9 @@ def edit_record(app, session, rec, state):
             status.configure(text='正在写回记录…', fg=UK.C.SUB)
 
             def done(written):
+                if written != 1:
+                    failed(RuntimeError('这条记录已不存在，请刷新会议后重试。'))
+                    return
                 # 先改内存里的记录再关层：关层会按父层 builder 重画整个详情页，
                 # 它读的就是这份记录，顺序反了会先画出旧文本再被覆盖
                 rec.update(fields)
@@ -693,8 +754,33 @@ def edit_record(app, session, rec, state):
                 if status.winfo_exists():
                     status.configure(text='保存失败：' + str(exc), fg=UK.C.RED)
 
-            app.background(lambda: MR.save_edits(session.path, {rec['id']: fields}),
-                           done, failed)
+            active = app.save_path and MT.job_key(app.save_path.with_suffix('.sqlite3')) == MT.job_key(session.path)
+            live = next((r for r in app.records if r.get('id') == rec['id']), None) if active else None
+            if live is not None and app.save_store:
+                # 当前会议走已有写队列，并作废正在返回的机器译文，避免覆盖人工修改。
+                store = app.save_store
+                try:
+                    updated = dict(live, **fields)
+                    store.upsert(updated, app.name_of(updated), app.ts_of(updated))
+                except Exception as exc:
+                    failed(exc)
+                    return
+                app._invalidate_translation(live)
+                live.update(fields)
+                index = app.records.index(live)
+                app.pending_tr.pop(index, None)
+                app.full_render()
+                app.float_sync(force=True)
+                def flush():
+                    if hasattr(store, 'flush'):
+                        store.flush()
+                    if getattr(store, 'last_error', None):
+                        raise RuntimeError('记录已保存，但 Markdown 同步失败，请重试。')
+                    return 1
+                app.background(flush, done, failed)
+            else:
+                app.background(lambda: MR.save_edits(session.path, {rec['id']: fields}),
+                               done, failed)
 
         UK.Pill(row, '保存', save, kind='primary').pack(side='right')
         UK.Pill(row, '取消', app._close_sheet, kind='ghost').pack(side='right', padx=(0, 8))

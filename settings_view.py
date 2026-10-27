@@ -14,10 +14,10 @@ def open_settings(self, page="服务"):
         card = UK.Card(win, padding=20, autosize=False)
         card.pack(fill="both", expand=True)
         tabs = tk.Frame(card.body, bg=UK.C.N100, padx=4, pady=4)
-        tabs.pack(anchor="w", pady=(0,16))
+        tabs.pack(anchor='w', pady=(0,16))
         host = tk.Frame(card.body, bg=W)
         host.pack(fill="both",expand=True)
-        page_titles=['服务','主题','翻译参数','请求参数','用量','备用','更新']
+        page_titles=['服务','主题','翻译参数','请求参数','用量','更新']
         pages = [tk.Frame(host,bg=W) for _ in page_titles]
         tab_buttons=[]
         def select_page(index):
@@ -25,7 +25,7 @@ def open_settings(self, page="服务"):
                 page.pack_forget()
                 tab_buttons[i].set_kind('selected' if i==index else 'tab')
             pages[index].pack(fill='both',expand=True)
-            if index==6:
+            if page_titles[index]=='更新':
                 self._sheet_footer.pack_forget()
             else:
                 self._sheet_footer.pack(side='bottom',fill='x',padx=24,pady=(8,12))
@@ -231,15 +231,11 @@ def open_settings(self, page="服务"):
                 label.configure(text=text)
             self.root.after(1500,refresh_usage)
         refresh_usage()
-        fallback={}
-        for title,attr,row,col,span in [('引擎（空为关闭）','fallback_engine',0,0,1),('模型','fallback_model',0,1,1),
-                                       ('Base URL','fallback_base_url',1,0,2),('API Key','fallback_api_key',2,0,2)]:
-            fallback[attr]=field(pages[5],title,getattr(self.tcfg,attr),row,col,span,secret=attr.endswith('key'))
 
         # 只在用户点击时查询公开 Release；网络工作通过队列回到主线程更新控件。
         import app_updates
         from teamsub import APP_VERSION
-        update_page=pages[6]
+        update_page=pages[page_titles.index('更新')]
         tk.Label(update_page,text=f'TeamsSub {APP_VERSION}',bg=W,fg=UK.C.TEXT,
                  font=UK.F_HEAD).pack(anchor='w',pady=(0,12))
         lab(update_page,'检查 GitHub 上的正式版本，手动下载并安装。').pack(anchor='w')
@@ -258,6 +254,7 @@ def open_settings(self, page="服务"):
                 if not opened:
                     update_status.configure(text='无法打开浏览器，请到 GitHub 仓库的 Releases 页面下载。',fg=UK.C.RED)
         def check_updates():
+            select_page(page_titles.index('更新'))
             check_button.command=None
             check_button.set_text('检查中…')
             release_button.pack_forget()
@@ -424,13 +421,9 @@ def open_settings(self, page="服务"):
                 except ValueError:
                     raise ValueError(f"{title}必须是 {low}–{high} 之间的整数")
                 extra_numbers[attr] = number
-            if fallback['fallback_engine'].get().strip() not in ('', 'openai', 'deepl', 'azure'):
-                raise ValueError("备用引擎请填写 openai / deepl / azure 或留空")
             snapshot()
             for attr, value in extra_numbers.items():
                 setattr(self.tcfg, attr, value)
-            for attr, field in fallback.items():
-                setattr(self.tcfg, attr, field.get().strip())
             self.tcfg.enabled = bool(sw_tr.get())
             self.tcfg.engine = {"openai 兼容": "openai", "DeepL": "deepl",
                                 "Azure": "azure"}[sel_engine.get()]
@@ -582,7 +575,7 @@ def open_settings(self, page="服务"):
                     state['key'], tuple(order), tuple(hidden), topic_values,
                     {key: value.get() for key, value in ents.items()},
                     {key: value.get() for key, value in extras.items()},
-                    {key: value.get() for key, value in fallback.items()})
+                    {})
 
         baseline = {'value': draft()}
         self._sheet_guard = lambda: (

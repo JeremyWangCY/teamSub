@@ -64,6 +64,8 @@ class CaptionStore:
             self.write_markdown()
 
     def write_markdown(self):
+        # 历史列表可修改正在记录的会议名称，投影始终读取数据库中的最新名称。
+        self.title, self.started = self.db.execute('SELECT title, started FROM session LIMIT 1').fetchone()
         lines = [f'# {self.title} · 自动保存', '', f'开始时间：{self.started}', '']
         for (raw,) in self.db.execute('SELECT payload FROM captions ORDER BY seq'):
             rec = json.loads(raw)

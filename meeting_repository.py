@@ -1,4 +1,4 @@
-"""Read-only session discovery/import. Same titles never imply same sessions."""
+"""Session discovery, import and edits. Same titles never imply same sessions."""
 from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime
@@ -122,7 +122,7 @@ def update_records(path, updates):
     db_path = path.with_suffix('.sqlite3')
     if path.suffix.lower() == '.md' or not db_path.exists():
         raise PermissionError('该记录是旧版 Markdown 文件，暂不支持编辑')
-    allowed = {'text', 'tr', 'tr_status', 'name', 'raw'}
+    allowed = {'text', 'tr', 'tr_status', 'name', 'raw', 'qa'}
     db = sqlite3.connect(str(db_path), timeout=5)
     try:
         written = 0
@@ -166,6 +166,27 @@ def save_edits(path, updates):
     written = update_records(path, updates)
     rewrite_markdown(path)
     return written
+
+
+def validate_title(title):
+    title = title.strip()
+    if not title or len(title) > 120 or any(ord(c) < 32 for c in title):
+        raise ValueError('会议名称须为 1–120 个字符，不能包含换行或控制字符。')
+    return title
+
+
+def rename_session(path, title):
+    """只修改显示名称，保留路径、开始时间、记录 ID 和会议内容。"""
+    title = validate_title(title)
+    if not editable(path):
+        raise PermissionError('旧版 Markdown 请先续接并另存为新版会议，再重命名。')
+    db_path = Path(path).with_suffix('.sqlite3').resolve()
+    with closing(sqlite3.connect(db_path.as_uri() + '?mode=rw', uri=True, timeout=5)) as db:
+        with db:
+            if db.execute('UPDATE session SET title = ?', (title,)).rowcount != 1:
+                raise ValueError('会议信息已变更，请刷新后重试。')
+    rewrite_markdown(path)
+    return title
 
 def translation_unchanged(record, expected):
     def status(rec):

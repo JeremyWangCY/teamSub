@@ -10,6 +10,7 @@
 """
 import os
 import tkinter as tk
+from PIL import Image, ImageDraw, ImageTk
 
 import ui_kit as UK
 
@@ -60,10 +61,11 @@ class FloatBar:
         top = tk.Frame(body, bg=UK.C.FLOAT_BG)
         top.grid(row=0, column=0, sticky="we")
         top.columnconfigure(4, weight=1)
-        self.dot = tk.Canvas(top, width=10, height=10, bg=UK.C.FLOAT_BG,
+        self.dot = tk.Canvas(top, width=14, height=14, bg=UK.C.FLOAT_BG,
                              highlightthickness=0, bd=0)
         self.dot.grid(row=0, column=0, padx=(0, 7))
-        self._dot_id = self.dot.create_oval(0, 0, 10, 10, fill=UK.C.FLOAT_ACCENT, outline="")
+        self._dot_id = self.dot.create_image(7, 7)
+        self._paint_dot(UK.C.FLOAT_ACCENT)
         self.lbl_name = tk.Label(top, text="", bg=UK.C.FLOAT_BG, fg=UK.C.FLOAT_TEXT,
                                  font=UK.F_NAME)
         self.lbl_name.grid(row=0, column=1, sticky="w")
@@ -141,6 +143,17 @@ class FloatBar:
         self._menu_widget = None
 
     # ---------------- 数据 ----------------
+    def _paint_dot(self, color):
+        # 内缩留白，四倍采样后缩小，避免原生小椭圆的锯齿及画布边缘裁切。
+        if getattr(self, '_dot_color', None) == color:
+            return
+        shape = Image.new('RGBA', (56, 56))
+        ImageDraw.Draw(shape).ellipse((8, 8, 47, 47), fill=color)
+        self._dot_image = ImageTk.PhotoImage(
+            shape.resize((14, 14), Image.Resampling.LANCZOS), master=self.dot)
+        self.dot.itemconfigure(self._dot_id, image=self._dot_image)
+        self._dot_color = color
+
     def sync(self, rec):
         """灌入最新一条记录；rec 为 None 时显示空态。"""
         text, translation = "", ""
@@ -152,12 +165,12 @@ class FloatBar:
             self.lbl_name.configure(text="")
             self.lbl_time.configure(text="")
             text = "暂无字幕"
-            self.dot.itemconfigure(self._dot_id, fill=UK.C.DISABLED)
+            self._paint_dot(UK.C.DISABLED)
         else:
             self.name_separator.grid()
             name = self.app.name_of(rec)
             self._full_name = name
-            self.dot.itemconfigure(self._dot_id, fill=self.app.speaker_color(rec["name"]))
+            self._paint_dot(self.app.speaker_color(rec["name"]))
             self.lbl_name.configure(text=UK.fit_text(name, UK.F_NAME, max(24, self.w - 240)))
             self.lbl_time.configure(text=self.app.ts_of(rec))
             if mode != "translation":

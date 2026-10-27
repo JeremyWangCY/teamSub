@@ -8,7 +8,7 @@ import app_updates as U
 import ui_kit as UK
 
 
-class UpdateSettingsTests(unittest.TestCase):
+class GuiTestCase(unittest.TestCase):
     def setUp(self):
         self.root=tk.Tk()
         self.errors=[]
@@ -48,6 +48,8 @@ class UpdateSettingsTests(unittest.TestCase):
         while not check() and time.monotonic()<end:self.pump(.03)
         self.assertTrue(check())
 
+
+class UpdateSettingsTests(GuiTestCase):
     def test_manual_check_and_download(self):
         self.assertFalse(self.app._sheet_footer.winfo_ismapped())
         release=U.Release('9.0.0',f'{U.RELEASES_URL}/tag/v9.0.0')
@@ -64,6 +66,20 @@ class UpdateSettingsTests(unittest.TestCase):
         self.assertFalse(self.errors)
         self.button('服务').command();self.pump()
         self.assertTrue(self.app._sheet_footer.winfo_ismapped())
+
+    def test_update_button_only_on_update_page_and_no_fallback_tab(self):
+        self.app.open_settings()
+        self.pump()
+        self.assertFalse(self.button('检查更新').winfo_ismapped())
+        self.assertFalse(any(isinstance(w,UK.Pill) and w.text=='备用'
+                             for w in self.walk(self.app.sheet_layer)))
+        self.button('更新').command()
+        self.pump()
+        self.assertTrue(self.button('检查更新').winfo_ismapped())
+        with patch.object(U,'check_latest_release',return_value=U.Release(support.A.APP_VERSION,U.RELEASES_URL)):
+            self.button('检查更新').command()
+            self.wait_for(lambda:any('已是最新正式版本' in s for s in self.texts()))
+        self.assertFalse(self.app._sheet_footer.winfo_ismapped())
 
     def test_latest_and_error_can_retry(self):
         with patch.object(U,'check_latest_release',return_value=U.Release(support.A.APP_VERSION,U.RELEASES_URL)):

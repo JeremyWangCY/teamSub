@@ -3,6 +3,21 @@ import tkinter as tk
 import ui_kit as UK
 import modes as MD
 
+def fit_initial_window(root):
+    """Fit the first window inside the available desktop, including its taskbar."""
+    width, height = root.winfo_screenwidth(), root.winfo_screenheight()
+    try:
+        import ctypes
+        from ctypes import wintypes
+        area = wintypes.RECT()
+        if ctypes.windll.user32.SystemParametersInfoW(0x30, 0, ctypes.byref(area), 0):
+            width, height = area.right - area.left, area.bottom - area.top
+    except (AttributeError, OSError):
+        pass
+    usable_width, usable_height = max(640, width - 32), max(480, height - 64)
+    root.minsize(min(1000, usable_width), min(640, usable_height))
+    root.geometry(f'{min(1280, usable_width)}x{min(820, usable_height)}')
+
 def refresh_topic(self):
     from collections import Counter
     from translator import all_topics
@@ -27,9 +42,8 @@ def build(self):
     m = MD.get(self.mode) or MD.get(MD.DEFAULT_MODE)
     r.title(f"TeamsSub · {m['short']} 实时字幕")
     if not getattr(self, "_built_once", False):
-        r.geometry("1280x820")
+        fit_initial_window(r)
     self._built_once = True
-    r.minsize(1000, 640)
     r.configure(bg=UK.C.N50)
 
     self.f_ui, self.f_ui_b = UK.F_UI, UK.F_HEAD

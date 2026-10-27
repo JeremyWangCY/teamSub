@@ -84,7 +84,7 @@ RESOURCE_DIR = _resource_dir()  # 只读资源（随 exe 打包）
 # 常量放在模块顶层（而不是 pyproject/打包元数据里），是为了让源码运行、
 # 冻结成 exe 两种方式读到的都是同一个值。
 APP_DISPLAY_NAME = "TeamsSub"
-APP_VERSION = "0.1.12"
+APP_VERSION = "0.1.13"
 
 CAPTION_DIR = Path(os.environ.get("TEAMSSUB_DATA_DIR", APP_DIR)) / "captions"
 
@@ -105,38 +105,6 @@ def _ensure_data_dirs() -> str:
                 "请把程序放到有写权限的目录（不要放在 Program Files 下），\n"
                 "或设置环境变量 TEAMSSUB_DATA_DIR 指向一个可写目录。"
                 % (CAPTION_DIR, exc))
-
-
-def _cleanup_stale_mei_dirs(max_age_seconds=3 * 86400):
-    """清掉被强杀留下的 PyInstaller 解压目录。
-
-    单文件 exe 每次启动都解压自身到临时目录的 _MEIxxxx，正常退出会自动删；
-    但被任务管理器强杀或关机硬终止时会留下几十 MB。用户不会去清临时目录，
-    几次之后就白占磁盘。
-
-    只在冻结模式跑，且只删超过 max_age_seconds 的目录——太新的可能属于另一个
-    正在运行的实例。全程静默，清理失败不影响启动。
-    """
-    if not getattr(sys, "frozen", False):
-        return
-    import shutil
-    import tempfile
-    meipass = getattr(sys, "_MEIPASS", None)
-    try:
-        cutoff = time.time() - max_age_seconds
-        for entry in Path(tempfile.gettempdir()).glob("_MEI*"):
-            if not entry.is_dir():
-                continue
-            if meipass and str(entry) == str(meipass):
-                continue                      # 自己这份，别删
-            try:
-                if entry.stat().st_mtime >= cutoff:
-                    continue                  # 可能是别人正在用的
-                shutil.rmtree(entry, ignore_errors=True)
-            except OSError:
-                continue
-    except Exception:
-        pass
 
 
 def data_dir():
@@ -2798,6 +2766,8 @@ class App:
         except Exception:
             pass
         self.flash("已取消关闭，记录仍在自动保存")
+        import update_workflow
+        update_workflow.cancel_pending(self)
 
     def _save_label_text(self):
         path = getattr(self, "save_path", None)
@@ -2840,6 +2810,12 @@ class App:
         """真正退出：此刻才摘图标、停线程、销毁窗口。"""
         if getattr(self, "_closing", False):
             return
+        import update_workflow
+        if not update_workflow.launch_pending(self):
+            return
+        state = update_workflow.state_for(self)
+        if state['cancel'] is not None:
+            state['cancel'].set()
         self._closing = True
         self._quit_pending = False
         self._cancel_close_poll()
@@ -3313,9 +3289,12 @@ def _acquire_single_instance() -> bool:
 
 
 def main():
+    # 隔离诊断必须先于单实例、配置读取和正常启动目录写入。
+    if len(sys.argv) == 3 and sys.argv[1] == '--self-test':
+        from runtime_diagnostics import run_self_test
+        raise SystemExit(0 if run_self_test(sys.argv[2]) else 1)
     if not _acquire_single_instance():
         return
-    _cleanup_stale_mei_dirs()       # 先清残留，不影响本次运行
     # 数据目录建不出来时用中文说清楚，别留给 PyInstaller 弹英文栈
     problem = _ensure_data_dirs()
     if problem:

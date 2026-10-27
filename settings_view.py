@@ -232,60 +232,115 @@ def open_settings(self, page="服务"):
             self.root.after(1500,refresh_usage)
         refresh_usage()
 
-        # 只在用户点击时查询公开 Release；网络工作通过队列回到主线程更新控件。
+        import sys
         import app_updates
+        import update_workflow as UW
         from teamsub import APP_VERSION
         update_page=pages[page_titles.index('更新')]
         tk.Label(update_page,text=f'TeamsSub {APP_VERSION}',bg=W,fg=UK.C.TEXT,
-                 font=UK.F_HEAD).pack(anchor='w',pady=(0,12))
-        lab(update_page,'检查 GitHub 上的正式版本，手动下载并安装。').pack(anchor='w')
-        lab(update_page,'检查时只访问公开版本信息，不发送密钥、设置或会议内容。').pack(anchor='w',pady=(6,16))
-        update_status=lab(update_page,'点击“检查更新”获取最新版本。')
+                 font=UK.F_HEAD).pack(anchor='w',pady=(0,20))
+        state_update=UW.state_for(self)
+        update_status=lab(update_page,'尚未检查')
+        update_status.configure(wraplength=680,justify='left')
         update_status.pack(anchor='w',pady=(0,12))
+        update_bar=tk.Canvas(update_page,height=8,bg=W,bd=0,highlightthickness=0)
         update_actions=tk.Frame(update_page,bg=W);update_actions.pack(anchor='w')
-        release_state={'url':None}
+
         def open_release():
             import webbrowser
-            if release_state['url']:
+            release=state_update['release']
+            if release:
                 try:
-                    opened=webbrowser.open(release_state['url'])
+                    opened=webbrowser.open(release.url)
                 except OSError:
                     opened=False
                 if not opened:
-                    update_status.configure(text='无法打开浏览器，请到 GitHub 仓库的 Releases 页面下载。',fg=UK.C.RED)
+                    state_update['error']='无法打开浏览器，请稍后重试'
+                    render_update()
+
         def check_updates():
-            select_page(page_titles.index('更新'))
-            check_button.command=None
-            check_button.set_text('检查中…')
-            release_button.pack_forget()
-            release_state['url']=None
-            update_status.configure(text='正在查询 GitHub…',fg=UK.C.SUB)
+            if state_update['phase'] in UW.BUSY_PHASES:
+                return
+            state_update.update(phase='checking',error='',release=None,path=None)
+            render_update()
             def run():
                 try:
                     release=app_updates.check_latest_release()
-                    error=None
+                    error=''
                 except Exception as exc:
                     release=None
                     error=str(exc) if isinstance(exc,app_updates.UpdateCheckError) else '检查失败，请稍后重试'
                 def show_result(_):
-                    if not update_status.winfo_exists():
-                        return
-                    check_button.command=check_updates
-                    check_button.set_text('重新检查')
-                    if error:
-                        update_status.configure(text=error,fg=UK.C.RED)
-                    elif release.newer_than(APP_VERSION):
-                        release_state['url']=release.url
-                        update_status.configure(text=f'发现新版本 {release.version} · 当前版本 {APP_VERSION}',fg=UK.C.A600)
-                        release_button.pack(side='left',padx=(12,0))
-                    else:
-                        update_status.configure(text=f'已是最新正式版本 · 当前版本 {APP_VERSION}',fg=UK.C.GREEN)
+                    state_update.update(phase='available',release=release,error=error,checked=True)
+                    if update_status.winfo_exists():
+                        render_update()
                 self.q.put(('ui',(show_result,None)))
             threading.Thread(target=run,daemon=True).start()
+
+        def download_update():
+            if state_update['path']:
+                UW.begin_install(self)
+            else:
+                UW.start_download(self,state_update['release'])
+            render_update()
+
         check_button=UK.Pill(update_actions,'检查更新',check_updates,kind='primary',bg=W,height=36)
         check_button.pack(side='left')
         release_button=UK.Pill(update_actions,'前往下载',open_release,kind='secondary',bg=W,height=36)
-        lab(update_page,'安装新版前请从系统托盘退出 TeamsSub；覆盖安装会保留配置和会议记录。').pack(anchor='w',pady=(16,0))
+        manual_button=UK.Pill(update_actions,'手动下载',open_release,kind='ghost',bg=W,height=36)
+        cancel_button=UK.Pill(update_actions,'取消下载',lambda: UW.cancel_download(self),kind='ghost',bg=W,height=36)
+
+        def render_update():
+            phase=state_update['phase']
+            busy=phase in UW.BUSY_PHASES
+            check_button.command=None if busy else check_updates
+            check_button.set_text('检查中…' if phase=='checking' else
+                                  ('重新检查' if state_update.get('checked') else '检查更新'))
+            release_button.pack_forget();manual_button.pack_forget();cancel_button.pack_forget()
+            update_bar.pack_forget()
+            color=UK.C.SUB
+            release=state_update['release']
+            if phase=='checking':
+                text='正在检查…'
+            elif phase in ('downloading','cancelling'):
+                received,total=state_update['received'],max(1,state_update['total'])
+                text=(f'下载中 {received*100//total}% · {received/1048576:.1f} / {total/1048576:.1f} MB'
+                      if phase=='downloading' else '正在取消…')
+                update_bar.pack(fill='x',before=update_actions,pady=(0,16))
+                width=max(20,update_page.winfo_width())
+                update_bar.delete('all')
+                UK.round_rect(update_bar,0,0,width-1,7,4,fill=UK.C.N100)
+                if received:
+                    UK.round_rect(update_bar,0,0,max(8,(width-1)*min(1,received/total)),7,4,fill=UK.C.A500)
+                cancel_button.set_text('取消下载')
+                if phase=='downloading':cancel_button.pack(side='left',padx=(12,0))
+            elif phase=='saving':
+                text='正在保存会议…'
+                cancel_button.set_text('取消更新');cancel_button.pack(side='left',padx=(12,0))
+            elif phase=='installing':
+                text='正在安装，即将重启…'
+            elif state_update['error']:
+                text=state_update['error'];color=UK.C.RED
+            elif release and release.newer_than(APP_VERSION):
+                text=f'发现新版本 {release.version} · 当前版本 {APP_VERSION}';color=UK.C.A600
+            elif release:
+                text=f'已是最新正式版本 · 当前版本 {APP_VERSION}';color=UK.C.GREEN
+            else:
+                text='尚未检查'
+            update_status.configure(text=text,fg=color)
+            if not busy and release and release.newer_than(APP_VERSION):
+                automatic=bool(getattr(sys,'frozen',False) and release.installer)
+                release_button.set_text(('安装并重启' if state_update['path'] else '下载并更新')
+                                        if automatic else '前往下载')
+                release_button.command=download_update if automatic else open_release
+                release_button.pack(side='left',padx=(12,0))
+                if automatic:manual_button.pack(side='left',padx=(8,0))
+
+        def poll_update():
+            if update_status.winfo_exists():
+                render_update()
+                self.root.after(200,poll_update)
+        poll_update()
 
         self._sheet_footer.pack(side='bottom',fill='x',padx=24,pady=(8,12))
         bottom=tk.Frame(self._sheet_footer,bg=UK.C.N50);bottom.pack(fill='x')

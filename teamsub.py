@@ -84,7 +84,7 @@ RESOURCE_DIR = _resource_dir()  # 只读资源（随 exe 打包）
 # 常量放在模块顶层（而不是 pyproject/打包元数据里），是为了让源码运行、
 # 冻结成 exe 两种方式读到的都是同一个值。
 APP_DISPLAY_NAME = "TeamsSub"
-APP_VERSION = "0.1.1"
+APP_VERSION = "0.1.11"
 
 CAPTION_DIR = Path(os.environ.get("TEAMSSUB_DATA_DIR", APP_DIR)) / "captions"
 
@@ -884,6 +884,7 @@ class App:
         self.paused = False
         self.hidden_until = 0.0
         self._status_txt, self._status_color = "连接中", UK.C.T3
+        self._status_code = None
         self.float_bar = None            # 悬浮字幕窗实例
         self._float_sig = None            # 最近一次同步的内容指纹
         self._hidden_since = 0.0          # 「一个窗口都没有」的起始时刻（看门狗用）
@@ -936,7 +937,7 @@ class App:
         self.root.after(100, self.pump)
         # 上次若没收尾（崩溃/断电），启动后把那份记录指给用户
         self.root.after(1200, self._check_recovery)
-        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.root.protocol("WM_DELETE_WINDOW", self.on_window_close)
 
     # ---------------- 窗口可见性 ----------------
     def _win_state(self, win):
@@ -974,18 +975,7 @@ class App:
         return getattr(e, "widget", None) is self.root
 
     def _on_minimize(self, e=None):
-        """最小化时收进托盘（挂了托盘）或切到悬浮条（没挂托盘）。
-
-        两处顺序与方式都不能含糊：
-
-        1. 先显示悬浮条、确认它真的可见，再收起主窗口。反过来写的话，一旦
-           悬浮条创建失败，主窗口已经没了，进程就退化成「活着但没有任何
-           窗口」的隐形实例，继续握着单实例锁。
-        2. 挂了托盘时用 ``withdraw``：任务栏本来就没有它的按钮，iconify 只会
-           留下一个既不在任务栏、也点不回来的最小化窗口。托盘图标是此时唯一
-           入口，所以只有托盘真的挂上了才允许走这条路（见 attach_tray）。
-           没挂托盘时必须退回 ``iconify``，把任务栏按钮留给用户。
-        """
+        """最小化保留任务栏入口，按已有设置显示悬浮字幕。"""
         if getattr(self, "_closing", False):
             return
         if not self._own_window_event(e):
@@ -994,8 +984,7 @@ class App:
             return                      # 自身 iconify/withdraw 触发的 <Unmap>
         if getattr(self, "_tray_hidden", False):
             return                      # 已经在托盘里了
-        tray_mode = getattr(self, "tray", None) is not None
-        if not tray_mode and not getattr(self.tcfg, "float_on_min", False):
+        if e is not None and self._win_state(self.root) != "iconic":
             return
         self._min_switching = True
         try:
@@ -1007,16 +996,37 @@ class App:
                     if self._float_visible():
                         self.float_sync(force=True)
             self._was_iconic = True     # 供 _on_restore / _reconcile 判断
-            if tray_mode:
-                self.root.withdraw()
-                self._tray_hidden = True
-                self._tray_hint()
-            else:
+            if self._win_state(self.root) != "iconic":
                 self.root.iconify()
         except Exception:
             self.flash("悬浮字幕窗打开失败，已保留主窗口")
             if self._win_state(self.root) != "normal":
                 self.root.deiconify()   # 绝不留下零窗口
+        finally:
+            self._min_switching = False
+
+    def on_window_close(self):
+        """标题栏关闭只收进托盘；明确的退出请求才结束进程。"""
+        if getattr(self, "_closing", False) or getattr(self, "_quit_pending", False):
+            return
+        if _consume_exit_request(self.root):
+            self.on_close()
+            return
+        tray = self.tray
+        if (tray is None or not getattr(tray, "icon_present", True)
+                or not getattr(tray, "running", True)):
+            self._on_minimize()
+            self.flash("托盘不可用，已最小化到任务栏；可在更多菜单中退出")
+            return
+        self._min_switching = True
+        self._tray_hidden = True
+        self._was_iconic = True
+        try:
+            self.root.withdraw()
+            self._tray_hint()
+        except tk.TclError:
+            self._tray_hidden = False
+            self.root.iconify()
         finally:
             self._min_switching = False
 
@@ -1034,47 +1044,13 @@ class App:
 
     # ---------------- 系统托盘 ----------------
     def attach_tray(self, tray):
-        """挂托盘图标，并把主窗口从任务栏摘掉。
-
-        顺序不可颠倒：先确认托盘可用，再隐藏任务栏按钮。反过来的话，托盘一旦
-        没挂上，用户就同时失去任务栏和托盘两个入口——那正是「窗口自己消失」
-        的老问题。托盘不可用时宁可留着任务栏按钮。
-        """
+        """挂托盘图标，保留正常标题栏和任务栏入口。"""
         self.tray = tray
         try:
             self.tray.set_tip("TeamsSub · %s" % (self._meeting_txt or "实时字幕"))
         except Exception:
             pass
-        self._hide_taskbar_button()
         self._schedule_tray_poll()
-
-    def _hide_taskbar_button(self):
-        """加 WS_EX_TOOLWINDOW、去 WS_EX_APPWINDOW，让窗口不占任务栏。"""
-        try:
-            import ctypes
-            from ctypes import wintypes
-            u = ctypes.windll.user32
-            u.GetAncestor.argtypes = (wintypes.HWND, wintypes.UINT)
-            u.GetAncestor.restype = wintypes.HWND
-            u.GetWindowLongW.argtypes = (wintypes.HWND, ctypes.c_int)
-            u.GetWindowLongW.restype = ctypes.c_long
-            u.SetWindowLongW.argtypes = (wintypes.HWND, ctypes.c_int,
-                                         ctypes.c_long)
-            u.SetWindowLongW.restype = ctypes.c_long
-            hwnd = u.GetAncestor(self.root.winfo_id(), 2)     # GA_ROOT
-            if not hwnd:
-                return
-            ex = u.GetWindowLongW(hwnd, -20)                  # GWL_EXSTYLE
-            u.SetWindowLongW(hwnd, -20, (ex | 0x00000080) & ~0x00040000)
-            # 扩展样式改完要重新 show 一次，任务栏按钮才会跟着刷新
-            self._min_switching = True
-            try:
-                self.root.withdraw()
-                self.root.deiconify()
-            finally:
-                self._min_switching = False
-        except Exception:
-            pass
 
     def _sync_tray_tip(self):
         """托盘悬停文本跟随当前会议（内容不变时不重复调 Win32）。"""
@@ -1156,6 +1132,7 @@ class App:
         if not getattr(self, "_was_iconic", False):
             return
         self._was_iconic = False
+        self._tray_hidden = False
         if self.float_bar is not None and self.float_on:
             self.float_bar.win.withdraw()
 
@@ -1165,10 +1142,18 @@ class App:
         frontend_shell.build(self)
 
     # ---------------- 内推层（设置 / 帮助 / 确认） ----------------
+    def _allow_leave_sheet(self):
+        guard = getattr(self, "_sheet_guard", None)
+        return guard is None or guard()
+
     def _show_sheet(self, title, builder, push=False):
         """在内容区推入一层。push=True 时保留当前层，返回时回到它。"""
+        if getattr(self, "_sheet_open", False) and not self._allow_leave_sheet():
+            return
         if push and getattr(self, "_sheet_open", False):
             self._sheet_stack.append((self._sheet_title, self._sheet_builder))
+        elif not push:
+            self._sheet_stack = []
         self._sheet_title, self._sheet_builder = title, builder
         self._sync_nav(title)
         self._sheet_open = True
@@ -1182,6 +1167,7 @@ class App:
 
     def _render_sheet(self, title, builder):
         layer = self.sheet_layer
+        self._sheet_guard = None
         UK.close_pops()
         for w in layer.winfo_children():
             w.destroy()
@@ -1200,9 +1186,12 @@ class App:
         inner.pack(fill="both", expand=True)
         builder(inner)
 
-    def _close_sheet(self):
+    def _close_sheet(self, skip_guard=False):
         if not getattr(self, "_sheet_open", False):
             return
+        if not skip_guard and not self._allow_leave_sheet():
+            return
+        self._sheet_guard = None
         if self._sheet_stack:
             title, builder = self._sheet_stack.pop()
             self._sheet_title, self._sheet_builder = title, builder
@@ -1322,7 +1311,7 @@ class App:
                 return
             if user32.IsIconic(hwnd):
                 return
-            if getattr(self, "_was_iconic", False):
+            if getattr(self, "_was_iconic", False) or getattr(self, "_tray_hidden", False):
                 # 主窗口已被还原（点击任务栏、单实例接管、托盘都算）→ 收悬浮条
                 self._was_iconic = False
                 self._tray_hidden = False
@@ -1377,7 +1366,7 @@ class App:
 
     def float_sync(self, force=False):
         """把最新一条字幕推给悬浮窗（指纹不变则跳过）。"""
-        if self.float_bar is None or not self.float_on:
+        if getattr(self, "float_bar", None) is None or not self.float_on:
             return
         rec = None
         for i in reversed(self.view_indices):
@@ -1385,8 +1374,10 @@ class App:
             if (r.get("text") or "").strip():
                 rec = r
                 break
-        sig = None if rec is None else (rec.get("text"), rec.get("tr"),
-                                        rec.get("tr_status"), rec.get("ts"))
+        if rec is None:
+            rec = next((r for r in reversed(self.records) if (r.get("text") or "").strip()), None)
+        sig = (self.display_mode, None if rec is None else (rec.get("name"), rec.get("text"),
+               rec.get("tr"), rec.get("tr_status"), rec.get("ts")))
         if sig == self._float_sig and not force:
             return
         self._float_sig = sig
@@ -1434,6 +1425,8 @@ class App:
 
     # ---------------- 主题 ----------------
     def toggle_theme(self):
+        if getattr(self, "_sheet_open", False) and not self._allow_leave_sheet():
+            return
         dark = UK.theme() != "dark"
         if not UK.set_theme("dark" if dark else "light"):
             return
@@ -1460,6 +1453,10 @@ class App:
         self._sheet_stack = []
         self._sheet_open = False
         UK.close_pops()
+        # 保持说话人分配顺序，更新为当前主题的色板。
+        palette = UK.speaker_colors()
+        self.color_map = {name: palette[i % len(palette)] for i, name in enumerate(self.color_map)}
+        self._status_txt, self._status_color = self._status_for(self._status_code)
         for w in self.root.winfo_children():
             w.destroy()
         self._build_ui()
@@ -1516,6 +1513,8 @@ class App:
         m.add_checkbutton(label="最小化时切到悬浮窗", variable=self.var_fmin,
                           command=self.toggle_float_on_min)
         m.add_command(label="帮助", command=self.show_help)
+        m.add_separator()
+        m.add_command(label="退出 TeamsSub", command=self.on_close)
         try:
             m.tk_popup(self.btn_more.winfo_rootx() - 120,
                        self.btn_more.winfo_rooty() + self.btn_more.winfo_height() + 6)
@@ -1811,6 +1810,7 @@ class App:
             spk = len({r['name'] for r in self.records})
             self.lbl_stat.configure(text=f"已捕获 {n} 条 · {spk} 位发言人")
         self.pump_translation()
+        self.float_sync()
         self._batching = False
         if self._batch_scroll and self.auto_scroll:
             self.scroll_bottom()
@@ -1884,6 +1884,7 @@ class App:
                      + (f" · 队列 {s['queue']}" if s['queue'] else ''))
 
     def on_status(self, s):
+        self._status_code = s
         self._status_txt, self._status_color = self._status_for(s)
         if s == "ok":
             self.status.set(*self._status_for(s))
@@ -1906,14 +1907,14 @@ class App:
                 "paused": ("已暂停", UK.C.T3)}.get(s, ("连接中", UK.C.T3))
 
     def _sync_scroll_hint(self):
-        at_bottom = self.txt.yview()[1] > 0.98
+        at_bottom = self.txt.yview()[1] >= 0.999
         self.auto_scroll = at_bottom
         try:
             if at_bottom:
                 self.to_bottom.place_forget()
             else:
                 self.to_bottom.place(relx=1.0, rely=1.0, x=-16, y=-12, anchor="se")
-                self.to_bottom.lift()
+                self.to_bottom.tk.call("raise", self.to_bottom._w)
         except Exception:
             pass
 
@@ -2068,9 +2069,49 @@ class App:
                 n += 1
         self.flash(f"已重新提交 {n} 条失败译文")
 
-    def open_settings(self):
+    def _translation_topic_name(self):
+        topics = all_topics(self.tcfg)
+        topic = topics.get(self.tcfg.topic)
+        if topic is not None:
+            return topic.get("name") or self.tcfg.topic
+        # 与翻译背景的兜底顺序一致，并明确提醒原主题已不可用。
+        key = "general" if "general" in topics else next(iter(topics), None)
+        if key is None:
+            return "未设置（请选择）"
+        return f"{topics[key].get('name') or key}（原主题不可用）"
+
+    def on_topic_pick(self, label):
+        """主界面直接切换：先保存，再更换服务；已完成的译文保留。"""
+        import frontend_shell
+        key = self._topic_choices.get(label)
+        if key is None or key == self.tcfg.topic:
+            return
+        settings_open = self._sheet_open and self._sheet_title == "设置"
+        if settings_open and not self._allow_leave_sheet():
+            frontend_shell.refresh_topic(self)
+            return
+        previous = self.tcfg
+        candidate = copy.deepcopy(previous)
+        candidate.topic = key
+        try:
+            candidate.save()
+        except (ValueError, OSError) as exc:
+            frontend_shell.refresh_topic(self)
+            self.flash(f"主题未切换：保存失败（{exc}）")
+            return
+        was_on = self.trans_on
+        self.stop_translation()
+        self.tcfg = candidate
+        frontend_shell.refresh_topic(self)
+        if settings_open:
+            self._close_sheet(skip_guard=True)
+        if was_on:
+            self.start_translation(silent=True)
+        self.flash(f"已切换主题：{self._translation_topic_name()} · 新字幕按此主题翻译")
+
+    def open_settings(self, page="服务"):
         import settings_view
-        settings_view.open_settings(self)
+        settings_view.open_settings(self, page=page)
 
     def _persist_topics(self, order, topics):
         """改动过的主题写回配置；纯自建必存，预设仅在偏离时存覆盖。"""
@@ -2126,6 +2167,11 @@ class App:
             box=tk.Text(b,height=3,wrap='word',font=UK.F_UI,bg=UK.C.N100,fg=UK.C.TEXT,bd=0,padx=12,pady=10,
                         insertbackground=UK.C.TEXT)
             box.grid(row=1,column=1,sticky='nsew',padx=(16,0));box.insert('1.0',rec.get('tr','') or '')
+            initial = box.get('1.0', 'end-1c')
+            self._sheet_guard = lambda: (
+                box.get('1.0', 'end-1c') == initial or messagebox.askyesno(
+                    '放弃未保存的修改？', '译文已修改但尚未保存。确定放弃修改？',
+                    parent=self.root, default='no'))
             self._sheet_footer.pack(side='bottom',fill='x',padx=24,pady=(8,12))
             row=tk.Frame(self._sheet_footer,bg=UK.C.N50);row.pack(fill='x')
             if rec.get('qa'):
@@ -2146,7 +2192,7 @@ class App:
                 except Exception:
                     rec["qa"] = []
                 self.autosave_tr(rec)
-                self._close_sheet()
+                self._close_sheet(skip_guard=True)
                 self.update_block(rid, rec)
                 self.flash("已保存")
 
@@ -2179,14 +2225,32 @@ class App:
         self.reader.paused = self.paused
         if hasattr(self, "btn_pause"):
             self.btn_pause.set_text("继续采集" if self.paused else "暂停采集")
-        self.status.set("已暂停" if self.paused else "已连接",
-                        UK.C.T3 if self.paused else UK.C.GREEN)
+        self.on_status("paused" if self.paused else "ok")
         self.flash("已暂停采集" if self.paused else "已恢复采集")
 
     def flash(self, msg):
-        old = self.lbl_stat.cget("text")
-        self.lbl_stat.configure(text=msg, fg=UK.C.A500)
-        self.root.after(1600, lambda: self.lbl_stat.configure(text=old, fg=UK.C.SUB))
+        previous = getattr(self, '_feedback_after', None)
+        if previous:
+            self.root.after_cancel(previous)
+        label = self.lbl_feedback
+        message = ('✓  ' if msg.startswith('已复制') else '') + msg
+        available = label.master.winfo_width()
+        width = max(200, (available if available > 1 else self.root.winfo_width() - 208) - 12)
+        label.configure(text=UK.fit_text(message, UK.F_MINI, width), fg=UK.C.A600)
+        label.place(x=0, y=0, relheight=1)
+        label.tk.call('raise', label._w)
+
+        def fade(step=0):
+            if not label.winfo_exists():
+                return
+            label.configure(fg=UK._blend(UK.C.A600, UK.C.N50, step / 5))
+            if step < 5:
+                self._feedback_after = self.root.after(30, fade, step + 1)
+            else:
+                label.place_forget()
+                self._feedback_after = None
+        # 2.35s 保持 + 0.15s 淡出；连续操作仅保留最新提示的计时器。
+        self._feedback_after = self.root.after(2350, fade)
 
     # ---------------- 检索 ----------------
     def apply_search(self):
@@ -2235,7 +2299,7 @@ class App:
             return
         self.root.clipboard_clear()
         self.root.clipboard_append(self.as_text(only=n))
-        self.flash(f"已复制最近 {n} 条")
+        self.flash(f"已复制最近 {min(n, len(self.records))} 条")
 
     def export(self):
         import frontend_views
@@ -2456,13 +2520,14 @@ class App:
             btn.set_kind('selected' if target in label else 'ghost')
 
     def show_live(self):
-        self._sync_nav()
+        if getattr(self, "_sheet_open", False) and not self._allow_leave_sheet():
+            return
         self._sheet_stack = []
-        self._close_sheet()
+        self._close_sheet(skip_guard=True)
+        self._sync_nav()
 
     def open_history(self):
         import frontend_views
-        self._sheet_stack = []          # 从导航进来是「重新开始」，不叠旧层
         frontend_views.open_history(self)
 
     def open_reading(self):
@@ -2584,7 +2649,7 @@ class App:
     # 现在的顺序：先请保存线程收尾（不阻塞） → 收尾完再摘图标 → 关窗。
     # 任何一步被取消都会把采集/托盘轮询恢复成原来能用的样子。
     def on_close(self):
-        """关闭主窗口。可被重复调用；可被用户在保存超时对话框里取消。
+        """明确退出程序。可被重复调用；可在保存超时对话框里取消。
 
         正常路径**完全同步**收尾（写线程几十毫秒就退出），行为和旧版一致，
         也保证了「调用方不用再进事件循环」这件事继续成立 —— 不少测试和
@@ -2596,6 +2661,8 @@ class App:
             return                      # 已在真正退出，别再走一遍
         if getattr(self, "_quit_pending", False):
             return                      # 已有一次退出流程在等保存
+        if getattr(self, "_sheet_open", False) and not self._allow_leave_sheet():
+            return
         self._quit_pending = True
         self._was_paused = bool(getattr(self.reader, "paused", False))
         log_note("主窗口被关闭 → 开始退出流程（PID %d）" % os.getpid())
@@ -2805,7 +2872,9 @@ class App:
         log_note("退出流程完成（PID %d）" % os.getpid())
         try:
             for job in self.root.tk.call('after', 'info'):
-                self.root.after_cancel(job)
+                # 定时器可能属于子控件。这里只停计时，回调命令由所属控件在
+                # destroy 时释放；用 root.after_cancel 会导致子控件重复删除命令。
+                self.root.tk.call('after', 'cancel', job)
         except Exception:
             pass
         try:
@@ -2817,6 +2886,27 @@ class App:
 _MUTEX_NAME = "Local\\TeamsSub_SingleInstance"
 _MUTEX_HANDLE = None      # 持有句柄：进程存活期间锁才有效（勿 CloseHandle）
 _INSTANCE_FILE = APP_DIR / "cache" / "instance.pid"
+_EXIT_REQUEST_PROPERTY = "TeamsSub.ExplicitExit"
+
+
+def _consume_exit_request(root):
+    """区分标题栏关闭与用户已确认的升级退出请求。"""
+    if os.name != "nt":
+        return False
+    import ctypes
+    from ctypes import wintypes
+    user32 = ctypes.windll.user32
+    user32.GetAncestor.argtypes = (wintypes.HWND, wintypes.UINT)
+    user32.GetAncestor.restype = wintypes.HWND
+    user32.GetPropW.argtypes = (wintypes.HWND, wintypes.LPCWSTR)
+    user32.GetPropW.restype = wintypes.HANDLE
+    user32.RemovePropW.argtypes = (wintypes.HWND, wintypes.LPCWSTR)
+    user32.RemovePropW.restype = wintypes.HANDLE
+    hwnd = user32.GetAncestor(root.winfo_id(), 2)
+    if not user32.GetPropW(hwnd, _EXIT_REQUEST_PROPERTY):
+        return False
+    user32.RemovePropW(hwnd, _EXIT_REQUEST_PROPERTY)
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -3208,7 +3298,10 @@ def _acquire_single_instance() -> bool:
             if wait_lock(8, 0.25):
                 return True
 
-        user32.PostMessageW(hwnd, 0x0010, 0, 0)   # WM_CLOSE → on_close 优雅退出
+        # 普通 WM_CLOSE 只收进托盘；升级时用户已确认退出，单独标记。
+        user32.SetPropW.argtypes = (wintypes.HWND, wintypes.LPCWSTR, wintypes.HANDLE)
+        user32.SetPropW(hwnd, _EXIT_REQUEST_PROPERTY, 1)
+        user32.PostMessageW(hwnd, 0x0010, 0, 0)
         if wait_lock(30, 0.4):                    # 最多等 ~12s
             return True
         _focus_teamssub(hwnd)

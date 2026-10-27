@@ -1,12 +1,13 @@
 import copy
 import threading
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import messagebox, simpledialog
 import ui_kit as UK
 from translator import all_topics, TOPICS, TranslationService
 
-def open_settings(self):
+def open_settings(self, page="服务"):
     """Tabbed settings, drafts validated before applying to the running service."""
+    initial_page = page
 
     def build(win):
         W = UK.C.N0
@@ -16,14 +17,19 @@ def open_settings(self):
         tabs.pack(anchor="w", pady=(0,16))
         host = tk.Frame(card.body, bg=W)
         host.pack(fill="both",expand=True)
-        pages = [tk.Frame(host,bg=W) for _ in range(6)]
+        page_titles=['服务','主题','翻译参数','请求参数','用量','备用','更新']
+        pages = [tk.Frame(host,bg=W) for _ in page_titles]
         tab_buttons=[]
         def select_page(index):
             for i,page in enumerate(pages):
                 page.pack_forget()
                 tab_buttons[i].set_kind('selected' if i==index else 'tab')
             pages[index].pack(fill='both',expand=True)
-        for i,title in enumerate(['服务','主题','翻译参数','请求参数','用量','备用']):
+            if index==6:
+                self._sheet_footer.pack_forget()
+            else:
+                self._sheet_footer.pack(side='bottom',fill='x',padx=24,pady=(8,12))
+        for i,title in enumerate(page_titles):
             tab=UK.Pill(tabs,title,lambda i=i:select_page(i),kind='tab',bg=UK.C.N100,height=36,padx=12)
             tab.pack(side='left',padx=2);tab_buttons.append(tab)
 
@@ -42,10 +48,28 @@ def open_settings(self):
             return w
 
         service=pages[0]
-        switchrow=tk.Frame(service,bg=W);switchrow.pack(fill='x',pady=(0,8))
+        switchrow=tk.Frame(service,bg=W);switchrow.pack(fill='x',pady=(0,4))
         lab(switchrow,'实时翻译').pack(side='left')
         sw_tr=UK.Switch(switchrow,value=bool(self.tcfg.enabled),bg=W)
         sw_tr.pack(side='left',padx=14)
+        profile_fields = ('engine', 'model', 'base_url', 'api_key', 'azure_region')
+        profiles = copy.deepcopy(self.tcfg.engine_profiles)
+        if not profiles:
+            profiles = {'当前配置': {key: getattr(self.tcfg, key) for key in profile_fields}}
+        active_profile = {'name': self.tcfg.active_engine_profile
+                          if self.tcfg.active_engine_profile in profiles else next(iter(profiles))}
+        profile_row = tk.Frame(switchrow, bg=W)
+        profile_row.pack(side='right', fill='x', expand=True, padx=(20,0))
+        lab(profile_row, '已存配置').pack(side='left', padx=(0,8))
+        profile_select = UK.Select(profile_row, list(profiles), value=active_profile['name'],
+                                   command=lambda name: switch_profile(name), bg=W, height=34, width=180)
+        profile_select.pack(side='left', fill='x', expand=True)
+        UK.Pill(profile_row, '新建', lambda: new_profile(), kind='secondary',
+                bg=W, height=34, padx=12).pack(side='left', padx=(8,0))
+        UK.Pill(profile_row, '重命名', lambda: rename_profile(), kind='ghost',
+                bg=W, height=34, padx=10).pack(side='left', padx=(4,0))
+        UK.Pill(profile_row, '删除', lambda: delete_profile(), kind='ghost',
+                bg=W, height=34, padx=12).pack(side='left', padx=(4,0))
         form=tk.Frame(service,bg=W);form.pack(fill='x')
         engine_cell=cell(form,'引擎',0)
         sel_engine=UK.Select(engine_cell,['openai 兼容','DeepL','Azure'],bg=W,height=36,
@@ -56,8 +80,71 @@ def open_settings(self):
         e_key=field(form,'API Key',self.tcfg.api_key,2,secret=True)
         e_region=field(form,'Azure 区域',self.tcfg.azure_region,2,1)
 
+        def snapshot_profile():
+            profiles[active_profile['name']] = {
+                'engine': {'openai 兼容':'openai', 'DeepL':'deepl', 'Azure':'azure'}[sel_engine.get()],
+                'model': e_model.get().strip(), 'base_url': e_base.get().strip(),
+                'api_key': e_key.get().strip(), 'azure_region': e_region.get().strip()}
+
+        def show_profile(name):
+            p = profiles[name]
+            sel_engine.set({'openai':'openai 兼容', 'deepl':'DeepL', 'azure':'Azure'}.get(p.get('engine'), 'openai 兼容'))
+            for widget, key in ((e_model,'model'), (e_base,'base_url'), (e_key,'api_key'), (e_region,'azure_region')):
+                widget.set(p.get(key, ''))
+            active_profile['name'] = name
+            profile_select.options = list(profiles)
+            profile_select.set(name)
+
+        def switch_profile(name):
+            if name != active_profile['name']:
+                snapshot_profile()
+                show_profile(name)
+
+        def new_profile():
+            if len(profiles) >= 8:
+                messagebox.showinfo('新建引擎配置', '最多保存 8 个配置，请先删除不需要的配置。', parent=self.root)
+                return
+            name = simpledialog.askstring('新建引擎配置', '输入配置名称：', parent=self.root)
+            if name is None:
+                return
+            name = name.strip()
+            if not name or name in profiles:
+                messagebox.showerror('新建引擎配置', '名称不能为空或与已有配置重复。', parent=self.root)
+                return
+            snapshot_profile()
+            profiles[name] = {'engine':'openai', 'model':'', 'base_url':'',
+                              'api_key':'', 'azure_region':''}
+            show_profile(name)
+
+        def delete_profile():
+            name = active_profile['name']
+            if len(profiles) == 1:
+                messagebox.showinfo('删除引擎配置', '请至少保留一个配置。', parent=self.root)
+                return
+            if not messagebox.askyesno('删除引擎配置', f'删除配置“{name}”？保存后生效。', parent=self.root):
+                return
+            del profiles[name]
+            show_profile(next(iter(profiles)))
+
+        def rename_profile():
+            old = active_profile['name']
+            name = simpledialog.askstring('重命名引擎配置', '输入新名称：',
+                                          initialvalue=old, parent=self.root)
+            if name is None:
+                return
+            name = name.strip()
+            if name == old:
+                return
+            if not name or name in profiles:
+                messagebox.showerror('重命名引擎配置', '名称不能为空或与已有配置重复。', parent=self.root)
+                return
+            snapshot_profile()
+            profiles[name] = profiles.pop(old)
+            show_profile(name)
+
         topics=all_topics(self.tcfg);order=list(topics)
-        state={'key':self.tcfg.topic if self.tcfg.topic in topics else (order[0] if order else None),'busy':False}
+        state={'key':self.tcfg.topic if self.tcfg.topic in topics else
+               ('general' if 'general' in topics else (order[0] if order else None)), 'busy':False}
         hidden=list(self.tcfg.topics_hidden or [])
         # 主题页：左边选主题，右边是「会议背景」+「译名对照」——术语跟着主题走。
         #
@@ -76,6 +163,8 @@ def open_settings(self):
         tb=tk.Frame(right,bg=W);tb.pack(anchor='w',pady=(4,4))
         header=tk.Frame(right,bg=W);header.pack(fill='x',pady=(0,4))
         lab(header,'会议背景').pack(side='left')
+        lbl_topic_state=lab(header,'')
+        lbl_topic_state.pack(side='right')
         # 两个输入框用 grid 分成等高的两行（weight=1），让 Tk 自己保证「一样高」。
         #
         # 之前用 pack + fill='both' + expand：RoundedText 内部关掉了尺寸传播，
@@ -93,6 +182,8 @@ def open_settings(self):
         terms_header=tk.Frame(edits,bg=W)
         terms_header.grid(row=1,column=0,sticky='we',pady=(6,2))
         lab(terms_header,'译名对照').pack(side='left')
+        tk.Label(terms_header,text='每行 原文=译文 · 适用于 OpenAI 兼容引擎',
+                 bg=W,fg=UK.C.T3,font=UK.F_MINI).pack(side='right')
         t_gloss=UK.RoundedText(edits,lines=2,bg=W)
         t_gloss.grid(row=2,column=0,sticky='nsew')
 
@@ -123,7 +214,8 @@ def open_settings(self):
                                         ('缓存命中 tokens','cache_hit_tokens'),('缓存未命中 tokens','cache_miss_tokens'),
                                         ('API 请求','calls'),('统计范围','scope')]):
             frame = cell(pages[4], title, i//2, i%2)
-            label = tk.Label(frame, text='—', bg=W, fg=UK.C.TEXT, font=UK.F_UI, anchor='w')
+            label = tk.Label(frame, text='—', bg=W, fg=UK.C.TEXT,
+                              font=UK.F_UI if key == 'scope' else ('Consolas', 11), anchor='w')
             label.pack(fill='x', pady=(4,12))
             usage_labels[key] = label
         def refresh_usage():
@@ -144,19 +236,83 @@ def open_settings(self):
                                        ('Base URL','fallback_base_url',1,0,2),('API Key','fallback_api_key',2,0,2)]:
             fallback[attr]=field(pages[5],title,getattr(self.tcfg,attr),row,col,span,secret=attr.endswith('key'))
 
+        # 只在用户点击时查询公开 Release；网络工作通过队列回到主线程更新控件。
+        import app_updates
+        from teamsub import APP_VERSION
+        update_page=pages[6]
+        tk.Label(update_page,text=f'TeamsSub {APP_VERSION}',bg=W,fg=UK.C.TEXT,
+                 font=UK.F_HEAD).pack(anchor='w',pady=(0,12))
+        lab(update_page,'检查 GitHub 上的正式版本，手动下载并安装。').pack(anchor='w')
+        lab(update_page,'检查时只访问公开版本信息，不发送密钥、设置或会议内容。').pack(anchor='w',pady=(6,16))
+        update_status=lab(update_page,'点击“检查更新”获取最新版本。')
+        update_status.pack(anchor='w',pady=(0,12))
+        update_actions=tk.Frame(update_page,bg=W);update_actions.pack(anchor='w')
+        release_state={'url':None}
+        def open_release():
+            import webbrowser
+            if release_state['url']:
+                try:
+                    opened=webbrowser.open(release_state['url'])
+                except OSError:
+                    opened=False
+                if not opened:
+                    update_status.configure(text='无法打开浏览器，请到 GitHub 仓库的 Releases 页面下载。',fg=UK.C.RED)
+        def check_updates():
+            check_button.command=None
+            check_button.set_text('检查中…')
+            release_button.pack_forget()
+            release_state['url']=None
+            update_status.configure(text='正在查询 GitHub…',fg=UK.C.SUB)
+            def run():
+                try:
+                    release=app_updates.check_latest_release()
+                    error=None
+                except Exception as exc:
+                    release=None
+                    error=str(exc) if isinstance(exc,app_updates.UpdateCheckError) else '检查失败，请稍后重试'
+                def show_result(_):
+                    if not update_status.winfo_exists():
+                        return
+                    check_button.command=check_updates
+                    check_button.set_text('重新检查')
+                    if error:
+                        update_status.configure(text=error,fg=UK.C.RED)
+                    elif release.newer_than(APP_VERSION):
+                        release_state['url']=release.url
+                        update_status.configure(text=f'发现新版本 {release.version} · 当前版本 {APP_VERSION}',fg=UK.C.A600)
+                        release_button.pack(side='left',padx=(12,0))
+                    else:
+                        update_status.configure(text=f'已是最新正式版本 · 当前版本 {APP_VERSION}',fg=UK.C.GREEN)
+                self.q.put(('ui',(show_result,None)))
+            threading.Thread(target=run,daemon=True).start()
+        check_button=UK.Pill(update_actions,'检查更新',check_updates,kind='primary',bg=W,height=36)
+        check_button.pack(side='left')
+        release_button=UK.Pill(update_actions,'前往下载',open_release,kind='secondary',bg=W,height=36)
+        lab(update_page,'安装新版前请从系统托盘退出 TeamsSub；覆盖安装会保留配置和会议记录。').pack(anchor='w',pady=(16,0))
+
         self._sheet_footer.pack(side='bottom',fill='x',padx=24,pady=(8,12))
         bottom=tk.Frame(self._sheet_footer,bg=UK.C.N50);bottom.pack(fill='x')
         lbl_test=tk.Label(bottom,text='',bg=UK.C.N50,fg=UK.C.SUB,font=UK.F_MINI,wraplength=300,justify='left')
         lbl_test.pack(side='left')
-        lbl_saved=tk.Label(bottom,text='',bg=UK.C.N50,fg=UK.C.GREEN,font=UK.F_MINI,wraplength=300,justify='left')
+        def current_topic_hint():
+            name=UK.fit_text(self._translation_topic_name(), UK.F_MINI, 220)
+            return f'当前主题：{name}'
+        lbl_saved=tk.Label(bottom,text=current_topic_hint(),bg=UK.C.N50,fg=UK.C.SUB,font=UK.F_MINI,wraplength=300,justify='left')
         lbl_saved.pack(side='left',padx=12)
 
         # ---------------- 主题逻辑 ----------------
+        def refresh_topic_state():
+            current=state['key'] == self.tcfg.topic and state['key'] in topics
+            lbl_topic_state.configure(
+                text='当前主题 · 修改后保存生效' if current else '待切换 · 保存后生效',
+                fg=UK.C.SUB if current else UK.C.A600)
+
         def load_fields(key):
             t = topics.get(key, {})
             e_tname.set(t.get("name", key))
             t_brief.set(t.get("brief", "") or "")
             t_gloss.set(t.get("glossary", "") or "")
+            refresh_topic_state()
 
         def snapshot(key=None):
             key = key or state["key"]
@@ -282,6 +438,9 @@ def open_settings(self):
             self.tcfg.model = e_model.get().strip()
             self.tcfg.api_key = e_key.get().strip()
             self.tcfg.azure_region = e_region.get().strip()
+            snapshot_profile()
+            self.tcfg.engine_profiles = copy.deepcopy(profiles)
+            self.tcfg.active_engine_profile = active_profile['name']
             self.tcfg.topic = state["key"] or "general"
             self.tcfg.topics_hidden = list(hidden)
             for key, attr in {"ctx":"context_n", "sent":"sentence_end_grace_ms", "settle":"settle_ms",
@@ -295,6 +454,23 @@ def open_settings(self):
             self.tcfg.topics_custom = {}
             self._persist_topics(order, topics)
 
+        test_state = {'seq': 0, 'tested': None}
+
+        def service_values():
+            return (active_profile['name'], sel_engine.get(), e_model.get(),
+                    e_base.get(), e_key.get(), e_region.get())
+
+        def check_test_result():
+            if not lbl_test.winfo_exists():
+                return
+            if test_state['tested'] is not None and service_values() != test_state['tested']:
+                test_state['seq'] += 1
+                test_state['tested'] = None
+                lbl_test.configure(text='配置已修改，请重新测试', fg=UK.C.SUB)
+            self.root.after(250, check_test_result)
+
+        check_test_result()
+
         def do_test():
             current = self.tcfg
             self.tcfg = copy.deepcopy(current)
@@ -307,13 +483,29 @@ def open_settings(self):
             finally:
                 self.tcfg = current
                 self.settle_sec = current.settle_ms / 1000.0
+            test_state['seq'] += 1
+            seq = test_state['seq']
+            tested = service_values()
+            test_state['tested'] = tested
             lbl_test.configure(text="测试中…", fg=UK.C.SUB)
             self.root.update_idletasks()
 
             def run():
-                svc_tmp = TranslationService(candidate, lambda *a: None)
-                ok, msg = svc_tmp.test()
-                self.q.put(('test_result', (lbl_test, ok, msg)))
+                try:
+                    svc_tmp = TranslationService(candidate, lambda *a: None)
+                    ok, msg = svc_tmp.test()
+                except Exception as exc:
+                    ok, msg = False, str(exc)
+                def show_result(_):
+                    if not lbl_test.winfo_exists() or seq != test_state['seq']:
+                        return
+                    if service_values() != tested:
+                        test_state['tested'] = None
+                        lbl_test.configure(text='配置已修改，请重新测试', fg=UK.C.SUB)
+                    else:
+                        lbl_test.configure(text=('✓ ' if ok else '✗ ') + str(msg)[:70],
+                                           fg=UK.C.GREEN if ok else UK.C.RED)
+                self.q.put(('ui', (show_result, None)))
 
             threading.Thread(target=run, daemon=True).start()
 
@@ -330,6 +522,10 @@ def open_settings(self):
                 self.settle_sec = previous.settle_ms / 1000.0
                 lbl_saved.configure(text=str(exc), fg=UK.C.RED)
                 return
+            baseline['value'] = draft()
+            import frontend_shell
+            frontend_shell.refresh_topic(self)
+            refresh_topic_state()
             if (old_topic != self.tcfg.topic or old_mode != self.tcfg.mode
                     or old_ver != self.tcfg.topic_version()):
                 for rec in self.records:
@@ -341,8 +537,7 @@ def open_settings(self):
             started = self.start_translation(silent=True) \
                 if self.tcfg.enabled else False
             # 不立即关面板：先就地明确告知保存结果与当前选中的主题
-            topic = all_topics(self.tcfg).get(self.tcfg.topic) or {}
-            name = topic.get("name") or self.tcfg.topic
+            name = self._translation_topic_name()
             if self.tcfg.enabled and not started:
                 lbl_saved.configure(
                     text=f"已保存 · 翻译未启动：请检查引擎与 API Key（当前主题：{name}）",
@@ -360,7 +555,7 @@ def open_settings(self):
             """保存提示复位（面板保持打开，由用户自行关闭）。"""
             try:
                 btn_save.set_text("保存")
-                lbl_saved.configure(text="")
+                lbl_saved.configure(text=current_topic_hint(), fg=UK.C.SUB)
             except Exception:
                 pass            # 面板已被关闭/重建，无需复位
 
@@ -370,6 +565,29 @@ def open_settings(self):
                                                                  padx=(10, 0))
 
         refresh(state["key"])
-        select_page(0)
+        select_page(page_titles.index(initial_page) if initial_page in page_titles else 0)
+
+        def draft():
+            profile_values = copy.deepcopy(profiles)
+            profile_values[active_profile['name']] = {
+                'engine': {'openai 兼容':'openai', 'DeepL':'deepl', 'Azure':'azure'}[sel_engine.get()],
+                'model': e_model.get().strip(), 'base_url': e_base.get().strip(),
+                'api_key': e_key.get().strip(), 'azure_region': e_region.get().strip()}
+            topic_values = copy.deepcopy(topics)
+            if state['key']:
+                item = topic_values.setdefault(state['key'], {})
+                item.update(name=e_tname.get().strip() or state['key'],
+                            brief=t_brief.get().strip(), glossary=t_gloss.get().strip())
+            return (bool(sw_tr.get()), active_profile['name'], profile_values,
+                    state['key'], tuple(order), tuple(hidden), topic_values,
+                    {key: value.get() for key, value in ents.items()},
+                    {key: value.get() for key, value in extras.items()},
+                    {key: value.get() for key, value in fallback.items()})
+
+        baseline = {'value': draft()}
+        self._sheet_guard = lambda: (
+            draft() == baseline['value'] or messagebox.askyesno(
+                '放弃未保存的设置？', '设置已修改但尚未保存。确定放弃修改？',
+                parent=self.root, default='no'))
 
     self._show_sheet("设置", build)

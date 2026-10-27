@@ -27,6 +27,12 @@ session.json
 build/
 dist/
 *.spec
+*.exe
+*.msi
+*.exe.bak
+release-artifacts/
+*.pem
+*.key
 
 # ---- 截图与临时产物 ----
 *.png

@@ -15,7 +15,8 @@ import ui_kit as UK
 
 W, H = 460, 132          # 默认尺寸
 MIN_W, MIN_H = 300, 92   # 缩放下限：再小连说话人一行都放不下
-ALPHA = 0.96             # 不透明度
+ALPHA = 1.0              # 实心卡面，避免桌面纹理干扰阅读
+RADIUS = 8               # 悬浮窗的四角使用同一半径
 
 
 class FloatBar:
@@ -34,7 +35,7 @@ class FloatBar:
         w.attributes("-alpha", ALPHA)
         # 窗口底色取卡片填充色：卡片圆角外那圈像素与卡面同色，裁圆角后
         # 不会有灰边残留（取 N50 就会在圆角处透出一圈浅灰）。
-        w.configure(bg=UK.C.N0)
+        w.configure(bg=UK.C.FLOAT_BG)
 
         cfg = getattr(app, "tcfg", None)
         self.w = max(MIN_W, int(getattr(cfg, "float_w", W) or W))
@@ -48,62 +49,72 @@ class FloatBar:
         self._resize = None
 
         # 卡片直接铺满窗口：外圈不再留底色边，圆角由窗口裁剪负责
-        self.card = UK.Card(w, radius=UK.R_CARD, padding=14, bg=UK.C.N0)
+        self.card = UK.Card(w, radius=RADIUS, padding=14, bg=UK.C.FLOAT_BG, fill=UK.C.FLOAT_BG,
+                            border=UK.C.FLOAT_BORDER)
         self.card.pack(fill="both", expand=True)
 
         body = self.card.body
         body.columnconfigure(0, weight=1)
 
-        # ---- 顶部：状态点 + 说话人 + 时间 + 右侧两个按钮 ----
-        top = tk.Frame(body, bg=UK.C.N0)
+        # 顶部信息与操作保持紧凑，字幕内容独立滚动。
+        top = tk.Frame(body, bg=UK.C.FLOAT_BG)
         top.grid(row=0, column=0, sticky="we")
-        top.columnconfigure(1, weight=1)
-        self.dot = tk.Canvas(top, width=8, height=8, bg=UK.C.N0,
+        top.columnconfigure(4, weight=1)
+        self.dot = tk.Canvas(top, width=10, height=10, bg=UK.C.FLOAT_BG,
                              highlightthickness=0, bd=0)
-        self.dot.grid(row=0, column=0, padx=(0, 6))
-        self._dot_id = self.dot.create_oval(0, 0, 8, 8, fill=UK.C.GREEN_F, outline="")
-        self.lbl_name = tk.Label(top, text="", bg=UK.C.N0, fg=UK.C.TEXT,
-                                 font=UK.F_SMALL)
+        self.dot.grid(row=0, column=0, padx=(0, 7))
+        self._dot_id = self.dot.create_oval(0, 0, 10, 10, fill=UK.C.FLOAT_ACCENT, outline="")
+        self.lbl_name = tk.Label(top, text="", bg=UK.C.FLOAT_BG, fg=UK.C.FLOAT_TEXT,
+                                 font=UK.F_NAME)
         self.lbl_name.grid(row=0, column=1, sticky="w")
-        self.lbl_time = tk.Label(top, text="", bg=UK.C.N0, fg=UK.C.T3,
-                                 font=UK.F_MINI)
-        self.lbl_time.grid(row=0, column=2, sticky="e", padx=(8, 8))
-        for i, (text, cmd) in enumerate((("⤢", self.back_to_main), ("✕", self.close))):
-            b = UK.Pill(top, text, cmd, kind="ghost", height=22, padx=8,
-                        font=UK.F_SMALL, bg=UK.C.N0)
-            b.grid(row=0, column=3 + i, padx=(2, 0))
+        self.lbl_time = tk.Label(top, text="", bg=UK.C.FLOAT_BG, fg=UK.C.FLOAT_MUTED,
+                                 font=UK.F_TIME)
+        self.name_separator = tk.Frame(top, bg=UK.C.FLOAT_LINE, width=1, height=16)
+        self.name_separator.grid(row=0, column=2, padx=(10, 10))
+        self.lbl_time.grid(row=0, column=3, sticky="w")
+        self.btn_back = self._icon_button(top, "back", self.back_to_main)
+        self.btn_back.grid(row=0, column=5, padx=(4, 4))
+        tk.Frame(top, bg=UK.C.FLOAT_LINE, width=1, height=18).grid(row=0, column=6)
+        self.btn_close = self._icon_button(top, "close", self.close)
+        self.btn_close.grid(row=0, column=7, padx=(4, 0))
 
-        # ---- 原文 ----
-        self.lbl_src = tk.Label(body, text="", bg=UK.C.N0, fg=UK.C.TEXT,
-                                font=(UK.FAMILY, getattr(app, "reading_size", 12)),
-                                anchor="w", justify="left")
-        self.lbl_src.grid(row=1, column=0, sticky="we", pady=(6, 0))
-
-        # ---- 译文 ----
-        # 箭头单独占一列：Tk 的 Label 只在空格处折行，中文长句整段会被当成
-        # 一个「词」整体推到下一行，箭头就孤零零留在上一行（"→" 独占一行）。
-        # 拆成两列后箭头永远贴着第一行，正文自己换行。
-        self.trrow = tk.Frame(body, bg=UK.C.N0)
-        self.trrow.grid(row=2, column=0, sticky="we", pady=(3, 0))
-        self.trrow.columnconfigure(1, weight=1)
-        font = (UK.FAMILY, getattr(app, "reading_size", 12))
-        self.lbl_arrow = tk.Label(self.trrow, text="", bg=UK.C.N0, fg=UK.C.A500,
-                                  font=font, anchor="nw")
-        self.lbl_arrow.grid(row=0, column=0, sticky="nw", padx=(0, 6))
-        self.lbl_tr = tk.Label(self.trrow, text="", bg=UK.C.N0, fg=UK.C.A500,
-                               font=font, anchor="w", justify="left")
-        self.lbl_tr.grid(row=0, column=1, sticky="we")
+        self.header_line = tk.Frame(body, bg=UK.C.FLOAT_LINE, height=1)
+        self.header_line.grid(row=1, column=0, sticky="we", pady=(8, 0))
+        viewport = tk.Frame(body, bg=UK.C.FLOAT_BG)
+        viewport.grid(row=2, column=0, sticky="nsew")
+        body.rowconfigure(2, weight=1)
+        self.content_canvas = tk.Canvas(viewport, bg=UK.C.FLOAT_BG, highlightthickness=0,
+                                        bd=0, height=50)
+        self.scroll = UK.ThinScroll(viewport, self.content_canvas, bg=UK.C.FLOAT_BG, width=4)
+        self.content_canvas.pack(side="left", fill="both", expand=True)
+        self.content = tk.Frame(self.content_canvas, bg=UK.C.FLOAT_BG)
+        self.content.columnconfigure(0, weight=1)
+        self._content_window = self.content_canvas.create_window(0, 0, anchor="nw", window=self.content)
+        size = getattr(app, "reading_size", 12)
+        self.lbl_src = tk.Label(self.content, text="", bg=UK.C.FLOAT_BG, fg=UK.C.FLOAT_TEXT,
+                                font=(UK.FAMILY, size), anchor="nw", justify="left")
+        self.lbl_src.grid(row=0, column=0, sticky="we", pady=(9, 8))
+        self.content_line = tk.Frame(self.content, bg=UK.C.FLOAT_LINE, height=1)
+        self.content_line.grid(row=1, column=0, sticky="we")
+        self.trrow = tk.Frame(self.content, bg=UK.C.FLOAT_BG)
+        self.trrow.grid(row=2, column=0, sticky="we", pady=(8, 2))
+        self.trrow.columnconfigure(0, weight=1)
+        self.lbl_arrow = tk.Label(self.trrow, text="", bg=UK.C.FLOAT_BG)
+        self.lbl_tr = tk.Label(self.trrow, text="", bg=UK.C.FLOAT_BG, fg=UK.C.FLOAT_ACCENT,
+                               font=(UK.FAMILY, size + 1, "normal" if UK.theme() == "dark" else "bold"),
+                               anchor="nw", justify="left")
+        self.lbl_tr.grid(row=0, column=0, sticky="we")
 
         # ---- 右下角缩放手柄 ----
         # overrideredirect 窗口没有系统边框，不能靠系统拖边缩放，只能自绘。
         # 内缩 8px：窗口裁了圆角，贴着角画的把手有一半落在裁剪区外。
-        self.grip = tk.Canvas(w, width=14, height=14, bg=UK.C.N0,
+        self.grip = tk.Canvas(w, width=14, height=14, bg=UK.C.FLOAT_BG,
                               highlightthickness=0, bd=0,
                               cursor="bottom_right_corner")
         self.grip.place(relx=1.0, rely=1.0, anchor="se", x=-8, y=-8)
         for off in (3, 6, 9):
             self.grip.create_line(14 - off, 12, 12, 14 - off,
-                                  fill=UK.C.T3, width=1)
+                                  fill=UK.C.FLOAT_MUTED, width=1)
         self.grip.bind("<Button-1>", self._resize_press)
         self.grip.bind("<B1-Motion>", self._resize_motion)
         self.grip.bind("<ButtonRelease-1>", self._resize_release)
@@ -111,14 +122,17 @@ class FloatBar:
         self._apply_wrap()
         self._fit()
         self._round_window()
+        w.bind("<Configure>", self._on_window_configure)
 
         # ---- 交互 ----
-        for wd in (self.card, body, top, self.lbl_src, self.trrow,
+        for wd in (self.card, body, top, self.content_canvas, self.content, self.lbl_src, self.trrow,
                    self.lbl_arrow, self.lbl_tr, self.lbl_name, self.lbl_time):
             wd.bind("<Button-1>", self._press)
             wd.bind("<B1-Motion>", self._motion)
             wd.bind("<ButtonRelease-1>", self._release)
             wd.bind("<Double-Button-1>", lambda e: self.back_to_main())
+        for wd in (self.content_canvas, self.content, self.lbl_src, self.trrow, self.lbl_tr):
+            wd.bind("<MouseWheel>", self._scroll_content)
         w.bind("<Button-1>", self._press)
         w.bind("<B1-Motion>", self._motion)
         w.bind("<ButtonRelease-1>", self._release)
@@ -129,43 +143,85 @@ class FloatBar:
     # ---------------- 数据 ----------------
     def sync(self, rec):
         """灌入最新一条记录；rec 为 None 时显示空态。"""
-        arrow, body = "", ""
+        text, translation = "", ""
+        color = UK.C.FLOAT_ACCENT
+        mode = getattr(self.app, "display_mode", "both")
         if rec is None:
+            self._full_name = ""
+            self.name_separator.grid_remove()
             self.lbl_name.configure(text="")
             self.lbl_time.configure(text="")
-            self.lbl_src.configure(text="暂无字幕", fg=UK.C.T3)
+            text = "暂无字幕"
             self.dot.itemconfigure(self._dot_id, fill=UK.C.DISABLED)
-            color = UK.C.A500
         else:
+            self.name_separator.grid()
             name = self.app.name_of(rec)
-            color = UK.C.A500
-            self.dot.itemconfigure(self._dot_id,
-                                   fill=self.app.speaker_color(rec["name"]))
-            self.lbl_name.configure(text=name, fg=UK.C.TEXT)
+            self._full_name = name
+            self.dot.itemconfigure(self._dot_id, fill=self.app.speaker_color(rec["name"]))
+            self.lbl_name.configure(text=UK.fit_text(name, UK.F_NAME, max(24, self.w - 240)))
             self.lbl_time.configure(text=self.app.ts_of(rec))
-            mode = getattr(self.app, "display_mode", "both")
-            self.lbl_src.configure(
-                text=rec.get("text", "") if mode != "translation" else "",
-                fg=UK.C.TEXT)
-            tr = rec.get("tr") or ""
+            if mode != "translation":
+                text = rec.get("text", "")
             if mode != "source":
-                if tr:
-                    arrow, body = "→", tr
-                elif rec.get("tr_status") == "pending":
-                    arrow, body, color = "→", "翻译中…", UK.C.T3
-                elif rec.get("tr_status") == "fail":
-                    arrow, body, color = "→", "翻译失败", UK.C.RED
-        self.lbl_arrow.configure(text=arrow, fg=color)
-        self.lbl_tr.configure(text=body, fg=color)
+                translation = rec.get("tr") or ""
+                if not translation and rec.get("tr_status") == "pending":
+                    translation, color = "翻译中…", UK.C.FLOAT_MUTED
+                elif not translation and rec.get("tr_status") == "fail":
+                    translation, color = "翻译失败", UK.C.RED
+                elif not translation and mode == "translation":
+                    translation, color = "暂无译文", UK.C.FLOAT_MUTED
+        self.lbl_src.configure(text=text, fg=UK.C.FLOAT_MUTED if rec is None else UK.C.FLOAT_TEXT)
+        self.lbl_tr.configure(text=translation, fg=color)
+        if text:
+            self.lbl_src.grid()
+        else:
+            self.lbl_src.grid_remove()
+        if translation:
+            self.trrow.grid()
+        else:
+            self.trrow.grid_remove()
+        if text and translation:
+            self.content_line.grid()
+        else:
+            self.content_line.grid_remove()
+        self.content_canvas.yview_moveto(0)
         self._fit()
 
-    def _round_window(self):
-        """把整个窗口裁成圆角（Windows 上无边框窗口默认是直角的）。
+    def _scroll_content(self, event):
+        self.content_canvas.yview_scroll(-int(event.delta / 120), "units")
+        return "break"
 
-        只把卡片画圆没用：卡片和窗口边缘之间还有一圈窗口底色，四个角会把它
-        露成方底。用 SetWindowRgn 直接裁窗口，四角透出的是桌面，和卡片弧线
-        完全重合。几何每次变化都要重裁一次，否则拖大之后右/下边是直的。
-        """
+    def _icon_button(self, master, icon, command):
+        """线条图标不依赖系统字体的符号形状。"""
+        button = tk.Canvas(master, width=30, height=28, bg=UK.C.FLOAT_BG,
+                           highlightthickness=0, bd=0, cursor="hand2", takefocus=True)
+        stroke = dict(fill=UK.C.FLOAT_MUTED, width=1.5, capstyle="round", joinstyle="round")
+        if icon == "back":
+            button.create_line(15, 6, 23, 6, 23, 22, 15, 22, **stroke)
+            button.create_line(6, 14, 18, 14, **stroke)
+            button.create_line(10, 10, 6, 14, 10, 18, **stroke)
+        else:
+            button.create_line(8, 7, 22, 21, **stroke)
+            button.create_line(22, 7, 8, 21, **stroke)
+        button.bind("<Enter>", lambda e: button.configure(bg=UK.C.A50))
+        button.bind("<Leave>", lambda e: button.configure(bg=UK.C.FLOAT_BG))
+        button.bind("<FocusIn>", lambda e: button.configure(bg=UK.C.A50))
+        button.bind("<FocusOut>", lambda e: button.configure(bg=UK.C.FLOAT_BG))
+        button.bind("<Button-1>", lambda e: "break")
+        def activate(event):
+            command()
+            return "break"
+        button.bind("<ButtonRelease-1>", activate)
+        button.bind("<Return>", activate)
+        button.bind("<space>", activate)
+        return button
+
+    def _on_window_configure(self, event):
+        if event.widget is self.win:
+            self._round_window()
+
+    def _round_window(self):
+        """以原生窗口的实际边界裁四角，尺寸改变后重新计算。"""
         if os.name != "nt":
             return
         try:
@@ -174,68 +230,78 @@ class FloatBar:
             u32 = ctypes.windll.user32
             u32.GetAncestor.argtypes = (wintypes.HWND, wintypes.UINT)
             u32.GetAncestor.restype = wintypes.HWND
-            hwnd = u32.GetAncestor(self.win.winfo_id(), 2)   # GA_ROOT
+            u32.GetWindowRect.argtypes = (wintypes.HWND, ctypes.POINTER(wintypes.RECT))
+            hwnd = u32.GetAncestor(self.win.winfo_id(), 2)
             if not hwnd:
                 return
-            scale = 1.0
-            try:
-                dpi = u32.GetDpiForWindow(wintypes.HWND(hwnd)) or 96
-                scale = max(1.0, dpi / 96.0)
-            except Exception:
-                pass
-            # 记下来：Tk 的 geometry 是逻辑像素，裁剪区要按物理像素算，
-            # 125% 缩放下两者差 1.25 倍（回归测试也用它换算）
-            self.dpi_scale = scale
+            rect = wintypes.RECT()
+            if not u32.GetWindowRect(hwnd, ctypes.byref(rect)):
+                return
+            width, height = rect.right - rect.left, rect.bottom - rect.top
+            if width <= 1 or height <= 1:
+                return
+            # Tk 已经处理 DPI；再次乘 GetDpiForWindow 会让三个圆角落到窗外。
+            self.dpi_scale = width / max(1, self.win.winfo_width())
+            diameter = max(2, round(RADIUS * 2 * self.dpi_scale))
+            geometry = (hwnd, width, height, diameter)
+            if geometry == getattr(self, "_region_geometry", None):
+                return
             gdi = ctypes.windll.gdi32
             gdi.CreateRoundRectRgn.argtypes = (ctypes.c_int,) * 6
             gdi.CreateRoundRectRgn.restype = wintypes.HRGN
+            gdi.DeleteObject.argtypes = (wintypes.HGDIOBJ,)
             u32.SetWindowRgn.argtypes = (wintypes.HWND, wintypes.HRGN, wintypes.BOOL)
-            r = int(round(UK.R_CARD * 2 * scale))        # 参数是直径，不是半径
-            width = int(round(self.w * scale))
-            height = int(round(self.h * scale))
-            rgn = gdi.CreateRoundRectRgn(0, 0, width + 1, height + 1, r, r)
-            if not rgn:
+            region = gdi.CreateRoundRectRgn(0, 0, width + 1, height + 1, diameter, diameter)
+            if not region:
                 return
-            # 成功后区域归系统所有，不能再 DeleteObject
-            if not u32.SetWindowRgn(hwnd, rgn, True):
-                gdi.DeleteObject(rgn)
-        except Exception:
+            if u32.SetWindowRgn(hwnd, region, True):
+                self._region_geometry = geometry  # 成功后区域由系统持有。
+            else:
+                gdi.DeleteObject(region)
+        except (tk.TclError, OSError):
             pass
 
     def _apply_wrap(self):
-        """换行宽度跟随窗口宽度。
-
-        固定值（旧版是 W-60）在用户把条子拖宽后会让文本提前折行、右侧留出
-        一大片空白；拖窄时又会顶破卡片右边。这里按「窗口宽 - 卡片内边距」
-        实时算（窗口已无外圈边框，只扣卡片自身的内边距）。
-        """
+        """文字随窗口宽度换行。"""
+        if hasattr(self, '_full_name'):
+            self.lbl_name.configure(text=UK.fit_text(self._full_name, UK.F_NAME, max(24, self.w - 240)))
         usable = max(120, self.w - 2 * self.card.pad - 10)
-        self.lbl_src.configure(wraplength=usable)
-        # 译文要扣掉箭头那一列，否则最后一行会顶到右边多出几个字
-        self.lbl_tr.configure(wraplength=max(80, usable - 22))
+        if self.scroll.winfo_manager():
+            usable = max(120, usable - 18)
+        self.content_canvas.itemconfigure(self._content_window, width=usable)
+        self.lbl_src.configure(wraplength=usable - 4)
+        self.lbl_tr.configure(wraplength=usable - 4)
 
     def _fit(self):
-        """按内容重排窗口高度（宽度由用户决定，保持位置不变）。
-
-        不能用 ``card.cv.winfo_reqheight()`` 反推：那是上一帧的分配值，短文本
-        时窗口会被连着两帧地压小，最后一行文字就压在卡片边缘外（旧版「文字
-        漫出框」就是这么来的）。直接问 body 要「内容真正需要多高」。
-        """
+        """自适应内容；超长字幕限制高度并提供滚动。"""
         try:
+            max_h = max(MIN_H, int(self.win.winfo_screenheight() * 0.55))
+            self._apply_wrap()
             self.card.update_idletasks()
-            need = self.card.body.winfo_reqheight() + 2 * self.card.pad + 12
-        except tk.TclError:
-            return
-        h = max(need, MIN_H, self.user_h)
-        if abs(h - self.h) <= 1:
-            return
-        self.h = h
-        try:
-            x, y = self.win.winfo_x(), self.win.winfo_y()
-            self.win.geometry(f"{self.w}x{h}+{x}+{y}")
+            content_h = self.content.winfo_reqheight()
+            overhead = self.card.body.winfo_reqheight() - self.content_canvas.winfo_reqheight() + 2 * self.card.pad + 12
+            viewport_h = max(30, max_h - overhead)
+            needs_scroll = content_h > viewport_h
+            if needs_scroll and not self.scroll.winfo_manager():
+                self.scroll.pack(side="right", fill="y", before=self.content_canvas)
+                self._apply_wrap()
+                self.card.update_idletasks()
+                content_h = self.content.winfo_reqheight()
+            elif not needs_scroll and self.scroll.winfo_manager():
+                self.scroll.pack_forget()
+                self._apply_wrap()
+                self.card.update_idletasks()
+                content_h = self.content.winfo_reqheight()
+            self.content_canvas.configure(height=min(content_h, viewport_h),
+                                          scrollregion=(0, 0, 0, content_h))
+            h = max(MIN_H, min(max_h, max(overhead + content_h, self.user_h)))
+            if abs(h - self.h) > 1:
+                self.h = h
+                x, y = self.win.winfo_x(), self.win.winfo_y()
+                self.win.geometry(f"{self.w}x{h}+{x}+{y}")
+                self._round_window()
         except tk.TclError:
             pass
-        self._round_window()            # 尺寸变了，裁剪区必须跟着换
 
     # ---------------- 缩放 ----------------
     def _resize_press(self, e):

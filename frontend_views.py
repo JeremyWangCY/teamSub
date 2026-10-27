@@ -23,7 +23,7 @@ def card(parent):
     return c.body
 
 
-def open_export(app, records=None, title=None, initial_format='md'):
+def open_export(app, records=None, title=None, initial_format=None):
     live = records is None
     frozen = ME.snapshot(app.records if live else records)
     title = title or app.reader.meeting_title or '会议记录'
@@ -35,6 +35,12 @@ def open_export(app, records=None, title=None, initial_format='md'):
 
     def build(parent):
         b = card(parent)
+        saved = getattr(app.tcfg, 'export_preferences', {})
+        if not isinstance(saved, dict):
+            saved = {}
+        formats = {'md':'Markdown', 'txt':'TXT 纯文本', 'srt':'SRT 字幕'}
+        contents = {'source':'原文', 'translation':'译文', 'both':'对照'}
+        selected_format = initial_format or saved.get('format', 'md')
         label(b, title, small=True)
         row = tk.Frame(b, bg=UK.C.N0)
         row.pack(fill='x', pady=8)
@@ -42,15 +48,15 @@ def open_export(app, records=None, title=None, initial_format='md'):
                           value='整场会议' if live else '所选历史记录', width=170, bg=UK.C.N0)
         scope.pack(side='left')
         fmt = UK.Select(row, ['Markdown', 'TXT 纯文本', 'SRT 字幕'],
-                        value={'md':'Markdown', 'txt':'TXT 纯文本', 'srt':'SRT 字幕'}[initial_format], width=160, bg=UK.C.N0)
+                        value=formats.get(selected_format, 'Markdown'), width=160, bg=UK.C.N0)
         fmt.pack(side='left', padx=12)
-        content = UK.Select(row, ['原文', '译文', '对照'], value='对照', width=150, bg=UK.C.N0)
+        content = UK.Select(row, ['原文', '译文', '对照'], value=contents.get(saved.get('content'), '对照'), width=150, bg=UK.C.N0)
         content.pack(side='left')
         choices = tk.Frame(b, bg=UK.C.N0)
         choices.pack(fill='x', pady=8)
-        name = tk.BooleanVar(value=True)
-        stamp = tk.BooleanVar(value=True)
-        synthetic = tk.BooleanVar(value=False)
+        name = tk.BooleanVar(value=saved.get('names', True) if isinstance(saved.get('names', True), bool) else True)
+        stamp = tk.BooleanVar(value=saved.get('timestamps', True) if isinstance(saved.get('timestamps', True), bool) else True)
+        synthetic = tk.BooleanVar(value=saved.get('synthetic_timing', False) if isinstance(saved.get('synthetic_timing', False), bool) else False)
         def check(text, var):
             tk.Checkbutton(choices, text=text, variable=var, bg=UK.C.N0, fg=UK.C.SUB,
                            selectcolor=UK.C.N0, activebackground=UK.C.N0, activeforeground=UK.C.TEXT,
@@ -123,6 +129,12 @@ def open_export(app, records=None, title=None, initial_format='md'):
             result.configure(text='正在写入…', fg=UK.C.SUB)
             def done(output):
                 state['busy'] = False
+                app.tcfg.export_preferences = dict(format=opt.format, content=opt.content,
+                    names=opt.names, timestamps=opt.timestamps, synthetic_timing=opt.synthetic_timing)
+                try:
+                    app.tcfg.save()
+                except OSError:
+                    app.flash('导出完成，但无法保存导出选项')
                 if not result.winfo_exists():
                     app.flash('导出完成：'+str(output))
                     return
@@ -150,12 +162,20 @@ def open_export(app, records=None, title=None, initial_format='md'):
 
 def open_history(app):
     from teamsub import CAPTION_DIR
+    state = {'all': [], 'visible': [], 'query': '', 'selected': set(),
+             'scroll': 0.0, 'loaded': False, 'errors': []}
     def build(parent):
         b = card(parent)
 
         status = label(b, '正在读取本地记录…', small=True)
-        search = UK.SearchBox(b, width=400, placeholder='搜索标题、日期或文件名', bg=UK.C.N0)
-        search.pack(anchor='w', pady=8)
+        search_row = tk.Frame(b, bg=UK.C.N0)
+        search_row.pack(anchor='w', pady=8)
+        search = UK.SearchBox(search_row, width=400, placeholder='搜索标题、日期或文件名', bg=UK.C.N0)
+        search.pack(side='left')
+        if state['query']:
+            search._ph = False
+            search.entry.configure(fg=UK.C.TEXT)
+            search.var.set(state['query'])
         frame = tk.Frame(b, bg=UK.C.N0)
         frame.pack(fill='both',expand=True)
         listing = tk.Listbox(frame, height=3, selectmode='extended', exportselection=False,
@@ -165,20 +185,51 @@ def open_history(app):
         sb = tk.Scrollbar(frame, command=listing.yview)
         sb.pack(side='right', fill='y')
         listing.configure(yscrollcommand=sb.set)
-        state = {'all':[], 'visible':[]}
+        def update_status():
+            if not state['loaded']:
+                status.configure(text='正在读取本地记录…')
+                return
+            count, selected_count = len(state['visible']), len(listing.curselection())
+            if not state['all'] and state['errors']:
+                text = '无法读取会议记录，请检查文件后刷新。'
+            elif not state['all']:
+                text = '暂无会议记录。开始会议后，记录会自动保存。'
+            elif not count:
+                text = '没有找到匹配的会议，请修改或清空搜索条件。'
+            else:
+                text = f'{count} 场' + (f' · 已选择 {selected_count} 场' if selected_count else ' · Ctrl 多选')
+            if state['errors']:
+                text += f' · {len(state["errors"])} 个文件无法读取，可尝试刷新'
+            status.configure(text=text)
+
         def filter_list():
             query = search.value().casefold()
+            state['query'] = search.value()
             state['visible'] = [s for s in state['all'] if query in (s.title+s.started+s.path.name).casefold()]
+            state['selected'].intersection_update(str(s.path) for s in state['visible'])
             listing.delete(0,'end')
-            for s in state['visible']:
+            for i, s in enumerate(state['visible']):
                 listing.insert('end', f'{s.started}  ·  {s.title}  ·  {s.count} 条  ·  {s.path.stem[-12:]}'+('  [旧版]' if s.legacy else ''))
+                if str(s.path) in state['selected']:
+                    listing.selection_set(i)
+            listing.yview_moveto(state['scroll'])
+            update_status()
         search.on_change = filter_list
+        def clear_search():
+            search._show_placeholder()
+            filter_list()
+        UK.Pill(search_row, '清除搜索', clear_search, kind='ghost', bg=UK.C.N0).pack(side='left', padx=8)
+        def on_selection(_event):
+            state['selected'] = {str(state['visible'][i].path) for i in listing.curselection()}
+            update_status()
+        listing.bind('<<ListboxSelect>>', on_selection)
         def loaded(value):
             if not b.winfo_exists():
                 return
             sessions, errors = value
             state['all'] = sessions
-            status.configure(text=f'{len(sessions)} 场 · Ctrl 多选'+(f' {len(errors)} 个文件无法读取：'+ '; '.join(errors)[:240] if errors else ''))
+            state['loaded'] = True
+            state['errors'] = errors
             filter_list()
         def refresh():
             store = app.save_store
@@ -198,6 +249,7 @@ def open_history(app):
                 status.configure(text='查看或续接时请选择一场会议；合并导出支持多选。')
                 return
             paths = [s.path for s in sessions]
+            state['scroll'] = listing.yview()[0]
             if action == 'resume':
                 app.resume_meeting(sessions[0])
             else:
@@ -288,12 +340,17 @@ def view_history(app, session, records):
     page_size = 200
     # 状态放在 build 外面：推层/弹层都会重跑 build，滚动位置、页码、编辑开关
     # 都得从这里恢复，不能活在 build 的局部变量里
-    state = {'records': records, 'page': 0, 'query': '', 'editing': False,
+    state = {'records': records, 'page': 0, 'query': '', 'editing': False, 'failed_only': False,
              'display': getattr(app, 'display_mode', 'both'), 'dirty': 0}
     key = MT.job_key(session.path)
 
     def shown():
-        return ME.filtered(state['records'], None, state['query'])
+        records = ME.filtered(state['records'], None, state['query'])
+        job = app._translation_jobs.get(key)
+        if state['failed_only'] and job:
+            failures = job.progress()['failure_details']
+            records = [rec for rec in records if rec.get('id') in failures]
+        return records
 
     def build(parent):
         b = card(parent)
@@ -360,6 +417,11 @@ def view_history(app, session, records):
             for i, rec in enumerate(batch):
                 end = TV.render_block(txt, i, rec, app, state['display'],
                                       retry=False)
+                if state['failed_only']:
+                    job = app._translation_jobs.get(key)
+                    error = job.progress()['failure_details'].get(rec.get('id'), '') if job else ''
+                    if error:
+                        txt.insert(end, "  补译失败：" + error + "\n")
                 if state['editing'] and MR.editable(session.path):
                     tag = f"ed{start + i}"
                     txt.insert(end, "  ✎ 编辑这条\n", ("editmark", tag))
@@ -437,12 +499,18 @@ def view_history(app, session, records):
                 progress.configure(text='请先在设置中配置翻译服务。', fg=UK.C.RED)
                 return
             if not messagebox.askyesno('补译会议记录',
-                    f'补译 {missing} 条，使用当前服务与主题，可能产生 API 费用。', parent=app.root):
+                    f'补译 {missing} 条\n'
+                    f'配置：{app.tcfg.active_engine_profile or "当前配置"}\n'
+                    f'引擎：{app.tcfg.engine} · 模型：{app.tcfg.model or "（未填写）"}\n'
+                    '使用当前主题，可能产生 API 费用。', parent=app.root):
                 return
             job = MT.TranslationJob(session.path, state['records'], app.tcfg,
                 persist=lambda results, cancel: MT.persist_for_app(app, session.path, results, cancel))
             app._translation_jobs[key] = job
             state['editing'] = False
+            state['failed_only'] = False
+            failure_button.set_text('查看失败项')
+            failure_button.pack_forget()
             job.start()
             rebuild_actions()
             paint()
@@ -483,6 +551,12 @@ def view_history(app, session, records):
         row.pack(fill='x')
         UK.Pill(row, '上一页', lambda: turn(-1), kind='ghost').pack(side='left')
         UK.Pill(row, '下一页', lambda: turn(1), kind='ghost').pack(side='left', padx=12)
+        failure_button = UK.Pill(row, '查看失败项', lambda: toggle_failures(), kind='ghost')
+        def toggle_failures():
+            state['failed_only'] = not state['failed_only']
+            state['page'] = 0
+            failure_button.set_text('显示全部' if state['failed_only'] else '查看失败项')
+            paint(reset_scroll=True)
         # 真正的「返回上一层」，不是再开一个历史列表（旧实现会叠层，
         # 还把主窗口一起带走了）
         UK.Pill(row, '返回历史列表', app._close_sheet,
@@ -525,6 +599,10 @@ def view_history(app, session, records):
                 if value['done'] and not seen['done']:
                     seen['done'] = True
                     rebuild_actions()
+                    if value['failure_details']:
+                        failure_button.pack(side='left')
+                    else:
+                        failure_button.pack_forget()
             app.root.after(200, poll_progress)
 
         poll_progress()
@@ -574,6 +652,18 @@ def edit_record(app, session, rec, state):
         row = tk.Frame(app._sheet_footer, bg=UK.C.N50)
         row.pack(fill='x')
         busy = {'on': False}
+        initial = (name.get(), source.get('1.0', 'end-1c'), trans.get('1.0', 'end-1c'))
+
+        def allow_leave():
+            if busy['on']:
+                status.configure(text='正在保存，请稍候。', fg=UK.C.SUB)
+                return False
+            current = (name.get(), source.get('1.0', 'end-1c'), trans.get('1.0', 'end-1c'))
+            return current == initial or messagebox.askyesno(
+                '放弃未保存的修改？', '会议记录已修改但尚未保存。确定放弃修改？',
+                parent=app.root, default='no')
+
+        app._sheet_guard = allow_leave
 
         def save():
             if busy['on']:
@@ -596,7 +686,7 @@ def edit_record(app, session, rec, state):
                 rec.update(fields)
                 state['dirty'] = state.get('dirty', 0) + 1
                 app.flash(f'已保存 {written} 条修改')
-                app._close_sheet()
+                app._close_sheet(skip_guard=True)
 
             def failed(exc):
                 busy['on'] = False

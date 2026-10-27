@@ -385,11 +385,14 @@ class Config:
     timeout_s: int = 15
     max_retry: int = 2
     glossary: str = ""                      # 术语表，每行 "原文=译文"
-    glossary_mode: str = "off"              # off=不注入(默认) / on=强制统一译名
+    glossary_mode: str = "off"              # 兼容旧配置：on 扩大术语质检范围；不控制提示词注入
     fallback_engine: str = ""               # 备用引擎
     fallback_base_url: str = ""
     fallback_model: str = ""
     fallback_api_key: str = ""
+    engine_profiles: dict = field(default_factory=dict)
+    active_engine_profile: str = ""
+    export_preferences: dict = field(default_factory=dict)
 
     @classmethod
     def load(cls) -> "Config":
@@ -401,7 +404,14 @@ class Config:
                 for k, v in data.items():
                     if k not in known:
                         continue
-                    clean[k] = _unprotect(v) if k in SECRET_FIELDS else v
+                    if k == "engine_profiles":
+                        clean[k] = {
+                            name: {**profile, "api_key": _unprotect(profile.get("api_key", ""))}
+                            for name, profile in v.items()
+                            if isinstance(name, str) and isinstance(profile, dict)
+                        } if isinstance(v, dict) else {}
+                    else:
+                        clean[k] = _unprotect(v) if k in SECRET_FIELDS else v
                 return cls(**clean)
             except Exception:
                 pass
@@ -415,6 +425,9 @@ class Config:
         for key in SECRET_FIELDS:
             if data.get(key):
                 data[key] = _protect(data[key])
+        for profile in data["engine_profiles"].values():
+            if isinstance(profile, dict) and profile.get("api_key"):
+                profile["api_key"] = _protect(profile["api_key"])
         CONFIG_PATH.write_text(
             json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -679,7 +692,7 @@ class DeepLProvider(Provider):
     name = "deepl"
 
     def translate(self, texts, src, tgt, contexts=None):
-        # DeepL 无上下文参数，语境由其 glossary / 术语表能力承担
+        # 当前适配器只发送原文和语言，未接入会议背景或译名对照。
         url = self.cfg.base_url or "https://api-free.deepl.com/v2/translate"
         if "/v2/translate" not in url:
             url = url.rstrip("/") + "/v2/translate"

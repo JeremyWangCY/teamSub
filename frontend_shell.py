@@ -3,6 +3,25 @@ import tkinter as tk
 import ui_kit as UK
 import modes as MD
 
+def refresh_topic(self):
+    from collections import Counter
+    from translator import all_topics
+    topics = all_topics(self.tcfg)
+    counts = Counter(t.get('name') or k for k, t in topics.items())
+    choices = {}
+    for key, topic in topics.items():
+        name = topic.get('name') or key
+        label = name if counts[name] == 1 else f'{name} [{key}]'
+        while label in choices:
+            label += f' [{key}]'
+        choices[label] = key
+    self._topic_choices = choices
+    select = self.topic_select
+    select.options = list(choices)
+    select.value = next((label for label, key in choices.items() if key == self.tcfg.topic),
+                        self._translation_topic_name())
+    select._paint()
+
 def build(self):
     r = self.root
     m = MD.get(self.mode) or MD.get(MD.DEFAULT_MODE)
@@ -82,6 +101,47 @@ def build(self):
     self.seg.pack(side="right")
     self.seg.set({"auto": 0, "zh": 1, "en": 2}.get(self.tcfg.mode, 0))
 
+    # 常驻上下文只读取已保存的配置，浏览设置草稿不会改变这里。
+    topic_slot = tk.Frame(bar, bg=UK.C.N50, width=1, height=36)
+    topic_slot.pack(side="left", fill="x", expand=True, padx=12)
+    topic_slot.pack_propagate(False)
+    tk.Label(topic_slot, text="翻译主题", font=UK.F_MINI, bg=UK.C.N50,
+             fg=UK.C.SUB).pack(side="left", padx=(0, 8))
+    self.topic_select = UK.Select(topic_slot, [], command=self.on_topic_pick,
+                                   height=36, width=120, bg=UK.C.N50, font=UK.F_SMALL)
+    self.topic_select.pack(side="left", fill="x", expand=True)
+    refresh_topic(self)
+
+    # 长名称可通过悬停或键盘聚焦查看全称；提示随控件销毁而销毁。
+    tip = {"window": None, "after": None}
+    def hide_topic_tip(event=None):
+        if tip["after"] is not None:
+            self.root.after_cancel(tip["after"])
+            tip["after"] = None
+        if tip["window"] is not None:
+            tip["window"].destroy()
+            tip["window"] = None
+    def show_topic_tip():
+        tip["after"] = None
+        if not self.topic_select.winfo_exists() or self.topic_select._pop is not None:
+            return
+        win = tip["window"] = tk.Toplevel(self.topic_select)
+        win.overrideredirect(True)
+        tk.Label(win, text=f"当前翻译主题：{self._translation_topic_name()}\n切换后立即保存，新字幕按此主题翻译\n在设置 → 主题中编辑会议背景与译名对照",
+                 bg=UK.C.N100, fg=UK.C.TEXT, font=UK.F_SMALL, padx=12, pady=8,
+                 wraplength=360, justify="left").pack()
+        win.update_idletasks()
+        x = min(self.topic_select.winfo_rootx(),
+                self.root.winfo_screenwidth() - win.winfo_reqwidth())
+        win.geometry(f"+{max(0, x)}+{self.topic_select.winfo_rooty() + 40}")
+    def queue_topic_tip(event=None):
+        hide_topic_tip()
+        tip["after"] = self.root.after(400, show_topic_tip)
+    for event in ("<Enter>", "<FocusIn>"):
+        self.topic_select.bind(event, queue_topic_tip, add="+")
+    for event in ("<Leave>", "<FocusOut>", "<Button-1>", "<KeyPress>", "<Destroy>"):
+        self.topic_select.bind(event, hide_topic_tip, add="+")
+
     # ---------- 内容层（sheet 会覆盖在这一层之上） ----------
     self.content = tk.Frame(r, bg=UK.C.N50)
     self.content.pack(fill="both", expand=True)
@@ -98,6 +158,9 @@ def build(self):
     self.lbl_save = tk.Label(foot, text=f"已保存 · {self.save_path.stem[-12:]}" if self.save_path else "自动保存至本机", bg=UK.C.N50,
                              fg=UK.C.T3, font=UK.F_MINI)
     self.lbl_save.pack(side="right")
+    # 短反馈覆盖统计的显示区域，统计本身继续更新；提示结束不会恢复过期文本。
+    self.lbl_feedback = tk.Label(foot, text="", bg=UK.C.N50,
+                                 fg=UK.C.A600, font=UK.F_MINI, anchor="w")
 
     # ---------- 主体 ----------
     body = tk.Frame(self.content, bg=UK.C.N50)
@@ -132,7 +195,8 @@ def build(self):
                        padx=6, pady=0, spacing1=2, spacing3=6,
                        selectbackground=UK.C.A100, selectforeground=UK.C.TEXT,
                        insertbackground=UK.C.TEXT, undo=False)
-    sb = UK.ThinScroll(card.body, self.txt, bg=UK.C.N0)
+    sb = UK.ThinScroll(card.body, self.txt, bg=UK.C.N0,
+                       on_user_scroll=self._sync_scroll_hint)
     sb.pack(side="right", fill="y", padx=(6, 0))
     self.txt.pack(side="left", fill="both", expand=True)
 
@@ -161,6 +225,8 @@ def build(self):
                       lambda e: self.txt.configure(cursor="xterm"))
     self.txt.bind("<Button-1>", self.on_click, add="+")
     self.txt.bind("<MouseWheel>", self.on_wheel, add="+")
+    for key in ("Up", "Down", "Prior", "Next", "Home", "End"):
+        self.txt.bind(f"<KeyRelease-{key}>", self.on_wheel, add="+")
     self.txt.bind("<Double-Button-1>", self.on_dblclick)
     self.txt.bind("<Button-3>", self.on_right_click)
     # 右键菜单：命中译文行时 on_right_click 会返回 "break" 接管（修正译法），

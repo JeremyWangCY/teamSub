@@ -81,6 +81,7 @@ class TranslationJob:
         self.completed = self.saved = self.failed = self.changed = 0
         self.error = self.last_error = ''
         self.updates = []
+        self.failure_details = {}
         self.thread = threading.Thread(target=self._run, daemon=True,
                                        name='meeting-backfill')
 
@@ -92,6 +93,7 @@ class TranslationJob:
             return dict(total=len(self.todo), completed=self.completed,
                         saved=self.saved, failed=self.failed, changed=self.changed,
                         error=self.error, last_error=self.last_error,
+                        failure_details=dict(self.failure_details),
                         done=self.done.is_set(), cancelled=self.cancel.is_set(),
                         updates=self.updates[since:])
 
@@ -126,6 +128,7 @@ class TranslationJob:
                         break
                 results = {}
                 failures = processed = 0
+                failure_details = {}
                 error = ''
                 for i, text, meta in batch:
                     if i not in remaining:
@@ -140,6 +143,7 @@ class TranslationJob:
                     else:
                         failures += 1
                         error = meta.get('error') or '翻译服务未返回译文'
+                        failure_details[self.records[i]['id']] = str(error)[:160]
                 last_reply = time.monotonic()
                 applied, projected = {}, False
                 if results:
@@ -154,6 +158,7 @@ class TranslationJob:
                     self.failed += failures
                     self.changed += len(results)-len(applied)
                     self.last_error = error or self.last_error
+                    self.failure_details.update(failure_details)
                     self.updates.extend(applied.items())
                 if dirty and time.monotonic()-last_project >= 1:
                     MR.rewrite_markdown(self.path)

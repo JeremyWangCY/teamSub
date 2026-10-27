@@ -15,11 +15,16 @@ import math
 
 # ------------------------------------------------------------------ 主题引擎
 _LIGHT = {
-    "N0": "#FCFBF8", "N50": "#F7F6F2", "N100": "#EFEEE8", "N150": "#E7E5DE",
-    "N200": "#DFDFE4", "N300": "#D6D6DB", "LINE": "#E3E0D8",
-    "LINE_D": "#D8D8DE", "SHADOW": "#E2E2E8",
-    "TEXT": "#292824", "SUB": "#69675F", "T3": "#827F76", "DISABLED": "#AEAEB2",
-    "A600": "#455994", "A500": "#586DB6", "A100": "#DCE3F4", "A50": "#EBEFF8",
+    "N0": "#FCFCFB", "N50": "#F5F5F3", "N100": "#EDEDEA", "N150": "#E5E5E1",
+    "N200": "#DADAD6", "N300": "#C4C4BF", "LINE": "#E8E8E4",
+    "LINE_D": "#DDDDD8", "SHADOW": "#E2E2DE",
+    "TEXT": "#292A27", "SUB": "#666861", "T3": "#74766F", "DISABLED": "#A3A59E",
+    "FOCUS_OUTER": "#D3D4CE", "FOCUS_INNER": "#ACAEA4",
+    "KNOB": "#FCFCFB",
+    "A600": "#345CB0", "A500": "#4168BA", "A100": "#DFE7F7", "A50": "#EBF0FA",
+    "FLOAT_BG": "#FCFCFB", "FLOAT_LINE": "#E3E8EF", "FLOAT_TEXT": "#222C3A",
+    "FLOAT_MUTED": "#778393", "FLOAT_ACCENT": "#285BC5",
+    "FLOAT_BORDER": "#9EAFBF",
     "BUTTON_RED": "#9C5755",
     "GREEN": "#1C843A", "GREEN_F": "#34C759", "GREEN_S": "#E8F9ED",
     "AMBER": "#B25000", "AMBER_F": "#FF9F0A", "AMBER_S": "#FFF4E0",
@@ -27,11 +32,16 @@ _LIGHT = {
 }
 # 暗色阶：文字强调色提亮，实心按钮保留足够的白字对比度。
 _DARK = {
-    "N0": "#262521", "N50": "#1D1C19", "N100": "#302F2A", "N150": "#403E37",
-    "N200": "#48484A", "N300": "#545456", "LINE": "#403E37",
-    "LINE_D": "#48484A", "SHADOW": "#000000",
-    "TEXT": "#F0EEE7", "SUB": "#B8B4A9", "T3": "#827F76", "DISABLED": "#69675F",
+    "N0": "#1A1A19", "N50": "#151515", "N100": "#20201E", "N150": "#292927",
+    "N200": "#3B3B37", "N300": "#55554F", "LINE": "#292927",
+    "LINE_D": "#363632", "SHADOW": "#0B0B0A",
+    "TEXT": "#E9E9E4", "SUB": "#B6B8AE", "T3": "#96998D", "DISABLED": "#72756A",
+    "FOCUS_OUTER": "#383A32", "FOCUS_INNER": "#626759",
+    "KNOB": "#E9E9E4",
     "A600": "#A9B8E8", "A500": "#586DB6", "A100": "#354267", "A50": "#2D3448",
+    "FLOAT_BG": "#1A1A19", "FLOAT_LINE": "#323631", "FLOAT_TEXT": "#E9E9E4",
+    "FLOAT_MUTED": "#B0BBC9", "FLOAT_ACCENT": "#A7C0FF",
+    "FLOAT_BORDER": "#64758A",
     "BUTTON_RED": "#D99C96",
     "GREEN": "#4CD964", "GREEN_F": "#4CD964", "GREEN_S": "#1E3A26",
     "AMBER": "#FFB340", "AMBER_F": "#FFB340", "AMBER_S": "#3E2F16",
@@ -78,6 +88,11 @@ def set_theme(name: str):
     if name not in _THEMES or name == _TokenMeta._state["active"]:
         return False
     _TokenMeta._state["active"] = name
+    # Tk 仅支持 normal/bold；暗色使用常规字重，避免伪造不支持的 360 字重。
+    global F_TITLE, F_HEAD, F_NAME
+    weight = "normal" if name == "dark" else "bold"
+    F_TITLE, F_HEAD, F_NAME = ((FAMILY, 17, weight), (FAMILY, 11, weight),
+                              (FAMILY, 10, weight))
     return True
 
 
@@ -232,18 +247,16 @@ def round_rect(cv: tk.Canvas, x1, y1, x2, y2, r, **kw):
 
 def ring_rect(cv: tk.Canvas, x1, y1, x2, y2, r, fill, active,
               ring=None, tags=None):
-    """圆角底 + 可选聚焦/选中环。
-
-    环必须画在「内缩 1.5px 的独立路径」上（宽 2、无填充），不能直接在
-    底形上叠 outline+width：平滑多边形的宽描边一旦贴住画布边缘，外半侧
-    会被画布裁剪，底边渲染成碎块（顶边完整、底边断裂的怪相即源于此）。
-    """
+    """无描边底色；聚焦时用两层内嵌中性色模拟双环阴影，完整留在画布内。"""
     kw = {"tags": tags} if tags else {}
     round_rect(cv, x1, y1, x2, y2, r, fill=fill, outline=fill, width=1, **kw)
     if active:
-        round_rect(cv, x1 + 1.5, y1 + 1.5, x2 - 1.5, y2 - 1.5,
-                   max(1.0, r - 1.5), fill="", outline=ring or C.A500,
-                   width=2, **kw)
+        round_rect(cv, x1 + .75, y1 + .75, x2 - .75, y2 - .75,
+                   max(1.0, r - .75), fill="", outline=C.FOCUS_OUTER,
+                   width=1.5, **kw)
+        round_rect(cv, x1 + 2, y1 + 2, x2 - 2, y2 - 2,
+                   max(1.0, r - 2), fill="", outline=ring or C.FOCUS_INNER,
+                   width=.75, **kw)
 
 
 # ------------------------------------------------------------------ 圆角卡片
@@ -255,7 +268,7 @@ class Card(tk.Frame):
         # 默认值必须在调用时解析：类定义时的 C.N0/C.LINE 绑定的是导入那一刻
         # 的主题（浅色），深色模式下会残留白底白发丝边
         fill = C.N0 if fill is None else fill
-        border = C.LINE if border is None else border
+        border = fill if border is None else border
         outer = bg or _parent_bg(master)
         super().__init__(master, bg=outer, highlightthickness=0, bd=0)
         self.radius, self.fill, self.border = radius, fill, border
@@ -307,16 +320,18 @@ class Pill(tk.Canvas):
         super().__init__(master, height=height, bg=self.bgcol,
                          highlightthickness=0, bd=0, cursor="hand2")
         self._hover = False
+        self._focused = False
+        self._pressed = False
         self._resize_to_text()
         self.bind("<Enter>", self._on_enter)
         self.bind("<Leave>", self._on_leave)
         self.bind("<Button-1>", self._on_press)
         self.bind("<ButtonRelease-1>", self._on_release)
         self.configure(takefocus=True)
-        self.bind("<Return>", lambda e: self.command() if self.command else None)
-        self.bind("<space>", lambda e: self.command() if self.command else None)
-        self.bind("<FocusIn>", self._on_enter)
-        self.bind("<FocusOut>", self._on_leave)
+        self.bind("<Return>", self._activate)
+        self.bind("<space>", self._activate)
+        self.bind("<FocusIn>", lambda e: self._set_focus(True))
+        self.bind("<FocusOut>", lambda e: self._set_focus(False))
         if self.align == "left":
             self.bind("<Configure>", lambda e: self._paint())
 
@@ -327,7 +342,7 @@ class Pill(tk.Canvas):
 
     def _colors(self):
         if self.kind == "primary":
-            fill = _blend(C.A500, "#000000", .12) if self._hover else C.A500
+            fill = _blend(C.A500, C.TEXT, .16 if self._pressed else .08) if self._hover else C.A500
             return fill, "#FFFFFF", ""
         if self.kind == "tab":
             return (C.N150 if self._hover else self.bgcol), C.SUB, ""
@@ -336,7 +351,7 @@ class Pill(tk.Canvas):
         if self.kind == "danger":
             return lighten(C.BUTTON_RED, .84 if self._hover else .92), C.BUTTON_RED, ""
         if self.kind == "secondary":
-            return (C.N100 if self._hover else C.N0), C.TEXT, C.LINE_D
+            return (C.N150 if self._hover else C.N100), C.TEXT, ""
         if self.kind == "tint":
             # 文字使用适配深浅主题的强调色。
             return (C.A50 if not self._hover else C.A100), C.A600, ""
@@ -350,6 +365,9 @@ class Pill(tk.Canvas):
         if fill != self.bgcol:
             round_rect(self, 0.5, 0.5, w - 0.5, self.h - 0.5, min(10, self.h / 2),
                        fill=fill, outline=outline or fill)
+        if self._focused:
+            round_rect(self, 2, 2, w - 2, self.h - 2, min(8, self.h / 2 - 2),
+                       outline=C.A600, width=1)
         self.create_text(self.padx if self.align == "left" else w / 2, self.h / 2 + 0.5,
                          text=self.text, anchor="w" if self.align == "left" else "center",
                          fill=fg, font=self.font)
@@ -378,11 +396,24 @@ class Pill(tk.Canvas):
         self._paint()
 
     def _on_press(self, _):
+        self.focus_set()
+        self._pressed = True
         self._paint()
 
-    def _on_release(self, _):
+    def _on_release(self, e):
+        fire = self._pressed and 0 <= e.x < self.winfo_width() and 0 <= e.y < self.h
+        self._pressed = False
+        self._paint()
+        if fire:
+            self._activate()
+
+    def _activate(self, _=None):
         if self.command:
             self.command()
+        return "break"
+
+    def _set_focus(self, focused):
+        self._focused = focused
         self._paint()
 
 
@@ -396,6 +427,7 @@ class Segmented(tk.Canvas):
         self.options = list(options)
         self.command = command
         self.index = 0
+        self._focused = False
         self.h = height
         self.seg_w = 0
         super().__init__(master, height=height, bg=self.bgcol, highlightthickness=0, bd=0)
@@ -407,6 +439,8 @@ class Segmented(tk.Canvas):
         self.configure(takefocus=True)
         self.bind("<Left>", lambda e: self.set((self.index-1)%len(self.options), notify=True))
         self.bind("<Right>", lambda e: self.set((self.index+1)%len(self.options), notify=True))
+        self.bind("<FocusIn>", lambda e: self._set_focus(True))
+        self.bind("<FocusOut>", lambda e: self._set_focus(False))
         self._paint()
 
     def _paint(self):
@@ -417,12 +451,19 @@ class Segmented(tk.Canvas):
         for i, opt in enumerate(self.options):
             if i == self.index:
                 round_rect(self, x + 1, 3, x + self.seg_w - 1, h - 3, (h - 6) / 2,
-                           fill=C.N0, outline=C.LINE)
+                           fill=C.N0, outline=C.N0)
             self.create_text(x + self.seg_w / 2, h / 2 + 0.5, text=opt,
                              fill=(C.TEXT if i == self.index else C.SUB), font=self.font)
             x += self.seg_w
+        if self._focused:
+            round_rect(self, 2, 2, w - 2, h - 2, h / 2 - 2, outline=C.A600, width=1)
+
+    def _set_focus(self, focused):
+        self._focused = focused
+        self._paint()
 
     def _click(self, e):
+        self.focus_set()
         i = int((e.x - 2) // self.seg_w)
         if 0 <= i < len(self.options) and i != self.index:
             self.set(i, notify=True)
@@ -473,11 +514,14 @@ class SearchBox(tk.Frame):
         self._win = self.cv.create_window(28, 15, anchor="w", window=self.entry,
                                           width=width - 40, height=20)
         self.cv.bind("<Configure>", self._resize)
-        self.cv.create_text(14, 15, text="⌕", fill=C.DISABLED, font=(FAMILY, 12))
+        # 统一线性图标，光学居中；不依赖系统字体里的搜索符号。
+        self.cv.create_oval(10, 12, 18, 20, outline=C.T3, width=1.2)
+        self.cv.create_line(17, 19, 21, 23, fill=C.T3, width=1.2, capstyle="round")
         self.var.trace_add("write", lambda *a: (not self._ph) and self.on_change and self.on_change())
         self._show_placeholder()
         self.entry.bind("<FocusIn>", self._on_focus_in)
         self.entry.bind("<FocusOut>", self._on_focus_out)
+        self.entry.bind("<Escape>", self.clear)
         for w in (self.cv, self.entry):
             w.bind("<Enter>", lambda e: self._set_hover(True))
             w.bind("<Leave>", lambda e: self._set_hover(False))
@@ -508,6 +552,13 @@ class SearchBox(tk.Frame):
 
     def value(self) -> str:
         return "" if self._ph else self.var.get().strip()
+
+    def clear(self, _=None):
+        self._ph = False
+        self.entry.configure(fg=C.TEXT)
+        self.var.set("")
+        self.entry.focus_set()
+        return "break"
 
     def _paint(self):
         # 层级：聚焦(强调描边) > 悬停(浅灰) > 静态，与 Field 一致
@@ -587,7 +638,7 @@ class SpeakerList(tk.Canvas):
                              fill=(C.TEXT if key == self.selected else C.SUB),
                              font=F_SMALL)
             self.create_text(w - 14, cy, text=str(count), anchor="e",
-                             fill=C.T3, font=F_MINI)
+                             fill=C.T3, font=F_TIME)
 
     def _row_at(self, y):
         idx = int(self.canvasy(y) // self.ROW_H)
@@ -624,54 +675,114 @@ def _clip(s: str, n: int) -> str:
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
+def fit_text(value, font, width):
+    """按真实字宽省略，保留完整数据；中英文、数字和不同 DPI 共用同一判据。"""
+    value = str(value)
+    face = tkfont.Font(font=font)
+    if face.measure(value) <= width:
+        return value
+    if width < face.measure("…"):
+        return ""
+    low, high = 0, len(value)
+    while low < high:
+        mid = (low + high + 1) // 2
+        if face.measure(value[:mid] + "…") <= width:
+            low = mid
+        else:
+            high = mid - 1
+    return value[:low] + "…"
+
+
 # ------------------------------------------------------------------ 细滚动条
 class ThinScroll(tk.Canvas):
     """Apple 风的细滚动条：只有一根圆头滑块，无箭头。"""
 
-    def __init__(self, master, target, bg=None, bar=None, width=6, height=1):
+    def __init__(self, master, target, bg=None, bar=None, width=6, height=1,
+                 on_user_scroll=None):
         bg = C.N0 if bg is None else bg      # 同 Card：默认值运行时解析
         # height 必须给最小值：Canvas 默认请求 265px，会把 grid 行撑高
         super().__init__(master, width=width + 6, height=height,
                          bg=bg, highlightthickness=0, bd=0)
         self.target = target
+        self.on_user_scroll = on_user_scroll
         self.bar = bar or C.N300
         self.w = width
         self.first, self.last = 0.0, 1.0
         self._drag = None
+        self._sync_after = None
         self.bind("<Configure>", lambda e: self._paint())
         self.bind("<Button-1>", self._press)
         self.bind("<B1-Motion>", self._move)
         self.bind("<ButtonRelease-1>", lambda e: setattr(self, "_drag", None))
         target.configure(yscrollcommand=self._on_scroll)
-        self.bind("<MouseWheel>", lambda e: (target.yview_scroll(int(-e.delta / 120), "units"), "break")[1])
+        target.bind("<Configure>", self._schedule_sync, add="+")
+        self.bind("<Destroy>", self._dispose_sync, add="+")
+        self.bind("<MouseWheel>", self._wheel)
 
     def _on_scroll(self, first, last):
         self.first, self.last = float(first), float(last)
         self._paint()
+        self._schedule_sync()
+
+    def _schedule_sync(self, _=None):
+        # Text 的标签/字体布局可能比 yscrollcommand 晚一帧，下一帧校正真实范围。
+        if self._sync_after is None:
+            self._sync_after = self.after(16, self._sync_range)
+
+    def _sync_range(self):
+        self._sync_after = None
+        if self.winfo_exists() and self.target.winfo_exists():
+            self.first, self.last = self.target.yview()
+            self._paint()
+
+    def _dispose_sync(self, _=None):
+        if self._sync_after is not None:
+            self.after_cancel(self._sync_after)
+            self._sync_after = None
 
     def _paint(self):
         self.delete("all")
         h = max(1, self.winfo_height())
         if self.last - self.first >= 0.999:
             return
-        y1, y2 = self.first * h + 3, self.last * h - 3
-        if y2 - y1 < 18:
-            y2 = y1 + 18
+        y1, y2 = self._thumb_bounds()
         round_rect(self, 3, y1, 3 + self.w, y2, self.w / 2, fill=self.bar, outline=self.bar)
+
+    def _thumb_bounds(self):
+        track = max(1, self.winfo_height() - 6)
+        span = max(0.0, min(1.0, self.last - self.first))
+        size = min(track, max(18, span * track))
+        start = 3 + (track - size) * min(1.0, self.first / max(.0001, 1 - span))
+        return start, start + size
+
+    def _notify_user(self):
+        if self.on_user_scroll:
+            self.on_user_scroll()
+
+    def _wheel(self, e):
+        self.target.yview_scroll(int(-e.delta / 120), "units")
+        self._notify_user()
+        return "break"
 
     def _press(self, e):
         h = max(1, self.winfo_height())
-        if self.first * h + 3 <= e.y <= self.last * h - 3:
+        y1, y2 = self._thumb_bounds()
+        if y1 <= e.y <= y2:
             self._drag = (e.y, self.first)
         else:
             self.target.yview_moveto(max(0.0, min(1.0, e.y / h - (self.last - self.first) / 2)))
+        self._notify_user()
 
     def _move(self, e):
         if not self._drag:
             return
         h = max(1, self.winfo_height())
         y0, f0 = self._drag
-        self.target.yview_moveto(max(0.0, min(1.0, f0 + (e.y - y0) / h)))
+        top, bottom = self._thumb_bounds()
+        travel = max(1, h - 6 - (bottom - top))
+        self.target.yview_moveto(max(0.0, min(1.0, f0 + (e.y - y0) / travel *
+                                                    (1 - self.last + self.first))))
+        self._notify_user()
 
 
 # ------------------------------------------------------------------ 圆角输入框
@@ -702,6 +813,12 @@ class Field(tk.Frame):
                               selectforeground=C.TEXT, show="•" if secret else "")
         self._win = self.cv.create_window(self.R, height / 2, anchor="w",
                                           window=self.entry, height=height - 10)
+        self._reveal_button = None
+        if secret:
+            self._reveal_button = Pill(self.cv, "显示", self._toggle_secret, height=26,
+                                       padx=7, bg=self.fill, font=F_MINI)
+            self._reveal_win = self.cv.create_window(width - self.R, height / 2,
+                                                     anchor="e", window=self._reveal_button)
         self.cv.bind("<Configure>", self._resize)
         self.entry.bind("<FocusIn>",
                         lambda e: (setattr(self, "_focus", True), self._paint()))
@@ -719,19 +836,31 @@ class Field(tk.Frame):
         if w <= 1:
             return
         self.cv.delete("shape")
-        # 层级：聚焦(描边) > 悬停(浅灰) > 静态
+        # 聚焦用内嵌双环，悬停只改变表面明度。
         fill = self.fill if (self._focus or not self._hover) else C.N150
         if self.entry.cget("bg") != fill:
             self.entry.configure(bg=fill)
         ring_rect(self.cv, 0.5, 0.5, w - 0.5, h - 0.5, self.R,
                   fill=fill, active=self._focus, tags="shape")
         self.cv.tag_lower("shape")
+        if self._reveal_button and self._reveal_button.bgcol != fill:
+            self._reveal_button.bgcol = fill
+            self._reveal_button.configure(bg=fill)
+            self._reveal_button._paint()
 
     def _resize(self, e):
-        self.cv.itemconfigure(self._win, width=max(10, e.width - 2 * self.R),
+        reserve = int(self._reveal_button["width"]) + 6 if self._reveal_button else 0
+        self.cv.itemconfigure(self._win, width=max(10, e.width - 2 * self.R - reserve),
                               height=max(12, e.height - 10))
         self.cv.coords(self._win, self.R, e.height / 2)
+        if self._reveal_button:
+            self.cv.coords(self._reveal_win, e.width - self.R, e.height / 2)
         self._paint()
+
+    def _toggle_secret(self):
+        concealed = bool(self.entry.cget("show"))
+        self.entry.configure(show="" if concealed else "•")
+        self._reveal_button.set_text("隐藏" if concealed else "显示")
 
     def get(self) -> str:
         return self.entry.get()
@@ -740,6 +869,9 @@ class Field(tk.Frame):
         self.entry.delete(0, "end")
         if v:
             self.entry.insert(0, v)
+        if self._reveal_button:
+            self.entry.configure(show="•")
+            self._reveal_button.set_text("显示")
 
     def focus(self):
         self.entry.focus_set()
@@ -872,6 +1004,7 @@ class Select(tk.Canvas):
         self.value = value if value in self.options else (self.options[0] if self.options else "")
         self.h, self.pad = height, 10
         self._hover = False
+        self._focused = False
         self._pop, self._rows = None, []
         super().__init__(master, width=width, height=height, bg=self.bgcol,
                          highlightthickness=0, bd=0, cursor="hand2")
@@ -879,8 +1012,10 @@ class Select(tk.Canvas):
         self.bind("<Button-1>", lambda e: self.toggle())
         self.bind("<Return>", lambda e: self.toggle())
         self.bind("<space>", lambda e: self.toggle())
-        self.bind("<Down>", lambda e: self.set(self.options[(self.options.index(self.value)+1)%len(self.options)],notify=True))
-        self.bind("<Up>", lambda e: self.set(self.options[(self.options.index(self.value)-1)%len(self.options)],notify=True))
+        self.bind("<Down>", lambda e: self._step(1))
+        self.bind("<Up>", lambda e: self._step(-1))
+        self.bind("<FocusIn>", lambda e: self._set_focus(True))
+        self.bind("<FocusOut>", lambda e: self._set_focus(False))
         self.bind("<Enter>", lambda e: (setattr(self, "_hover", True), self._paint()))
         self.bind("<Leave>", lambda e: (setattr(self, "_hover", False), self._paint()))
         self.bind("<Configure>", lambda e: self._paint())
@@ -894,15 +1029,29 @@ class Select(tk.Canvas):
         on = self._pop is not None
         fill = C.N100 if (on or not self._hover) else C.N150
         ring_rect(self, 0.5, 0.5, w - 0.5, h - 0.5, R_FIELD,
-                  fill=fill, active=on, tags="shape")
+                  fill=fill, active=on or self._focused, tags="shape")
         self.tag_lower("shape")
-        self.create_text(self.pad, h / 2 + 0.5, text=self.value, anchor="w",
-                         fill=C.TEXT, font=self.font)
+        self.create_text(self.pad, h / 2 + 0.5,
+                         text=fit_text(self.value, self.font, w - self.pad - 30),
+                         anchor="w", fill=C.TEXT, font=self.font, tags="value")
         cx, cy = w - 14, h / 2
         self.create_line(cx - 3.5, cy - 1.5, cx, cy + 2, fill=C.SUB, width=1.5,
                          capstyle="round")
         self.create_line(cx, cy + 2, cx + 3.5, cy - 1.5, fill=C.SUB, width=1.5,
                          capstyle="round")
+
+    def _set_focus(self, focused):
+        self._focused = focused
+        self._paint()
+
+    def _step(self, direction):
+        if self.options:
+            index = self.options.index(self.value) if self.value in self.options else 0
+            self.set(self.options[(index + direction) % len(self.options)], notify=True)
+            if self.winfo_exists() and self._pop is not None:
+                self.close()
+                self._open()
+        return "break"
 
     def toggle(self):
         self.close() if self._pop else self._open()
@@ -921,11 +1070,15 @@ class Select(tk.Canvas):
             pass
         if p in _OPEN_POPS:
             _OPEN_POPS.remove(p)
+        if self.winfo_exists() and self.winfo_ismapped():
+            self.focus_set()
         self._paint()
 
     def _open(self):
         top = self.winfo_toplevel()
-        w = int(self["width"])
+        if not self.options:
+            return
+        w = max(1, self.winfo_width())
         h = self.ROW_H * len(self.options) + 8
         # 画布项里的控件 rootx 不可靠，一律用 place 的 in_ 相对锚点定位
         oy = max(0, self.winfo_rooty() - top.winfo_rooty())
@@ -945,7 +1098,8 @@ class Select(tk.Canvas):
             if on:
                 round_rect(pop, 5, a + 1, w - 5, b - 1, 7,
                            fill=C.A50, outline=C.A50)
-            pop.create_text(self.pad + 2, (a + b) / 2, text=opt, anchor="w",
+            pop.create_text(self.pad + 2, (a + b) / 2,
+                            text=fit_text(opt, self.font, w - self.pad - 34), anchor="w",
                             fill=(C.TEXT if on else C.SUB), font=self.font)
             if on:
                 pop.create_text(w - 10, (a + b) / 2, text="✓", anchor="e",
@@ -955,13 +1109,16 @@ class Select(tk.Canvas):
         self._paint()               # 触发框切换到高亮环状态
 
         def down(e):
-            if not any(a <= e.y <= b for _, a, b in self._rows):
+            if not (0 <= e.x < w and any(a <= e.y < b for _, a, b in self._rows)):
                 self.close()
             return "break"
 
         def up(e):
+            if not 0 <= e.x < w:
+                self.close()
+                return "break"
             for opt, a, b in self._rows:
-                if a <= e.y <= b:
+                if a <= e.y < b:
                     self.set(opt, notify=True)
                     self.close()
                     break
@@ -970,6 +1127,10 @@ class Select(tk.Canvas):
         pop.bind("<Button-1>", down, add="+")
         pop.bind("<ButtonRelease-1>", up)
         pop.bind("<Escape>", lambda e: (self.close(), "break")[1])
+        pop.bind("<Down>", lambda e: self._step(1))
+        pop.bind("<Up>", lambda e: self._step(-1))
+        pop.bind("<Return>", lambda e: (self.close(), "break")[1])
+        pop.bind("<space>", lambda e: (self.close(), "break")[1])
         try:
             pop.focus_set()
             pop.grab_set()
@@ -1010,6 +1171,7 @@ class ModeSwitch(tk.Canvas):
         self.value = value if value in keys else (keys[0] if keys else "")
         self.h = H_PILL
         self._hover = False
+        self._focused = False
         self._pop, self._rows = None, []
         super().__init__(master, height=self.h, bg=self.bgcol,
                          highlightthickness=0, bd=0, cursor="hand2")
@@ -1017,6 +1179,8 @@ class ModeSwitch(tk.Canvas):
         self.configure(takefocus=True)
         self.bind("<space>", lambda e: self.toggle())
         self.bind("<Return>", lambda e: self.toggle())
+        self.bind("<FocusIn>", lambda e: self._set_focus(True))
+        self.bind("<FocusOut>", lambda e: self._set_focus(False))
         self.bind("<Enter>", lambda e: (setattr(self, "_hover", True), self._paint()))
         self.bind("<Leave>", lambda e: (setattr(self, "_hover", False), self._paint()))
         self._paint()
@@ -1045,7 +1209,7 @@ class ModeSwitch(tk.Canvas):
         on = self._pop is not None
         fill = C.N100 if (on or not self._hover) else C.N150
         ring_rect(self, 0.5, 0.5, w - 0.5, self.h - 0.5, self.h / 2,
-                  fill=fill, active=on, tags="shape")
+                  fill=fill, active=on or self._focused, tags="shape")
         self.tag_lower("shape")
         x = self.PAD
         self.create_oval(x, self.h / 2 - 4, x + 8, self.h / 2 + 4,
@@ -1057,6 +1221,10 @@ class ModeSwitch(tk.Canvas):
                          capstyle="round")
         self.create_line(cx, cy + 2, cx + 3.5, cy - 1.5, fill=C.SUB, width=1.5,
                          capstyle="round")
+
+    def _set_focus(self, focused):
+        self._focused = focused
+        self._paint()
 
     def toggle(self):
         self.close() if self._pop else self._open()
@@ -1075,6 +1243,8 @@ class ModeSwitch(tk.Canvas):
             pass
         if p in _OPEN_POPS:
             _OPEN_POPS.remove(p)
+        if self.winfo_exists() and self.winfo_ismapped():
+            self.focus_set()
         self._paint()
 
     def _open(self):
@@ -1116,13 +1286,16 @@ class ModeSwitch(tk.Canvas):
         self._paint()               # 触发胶囊切换到高亮环状态
 
         def down(e):
-            if not any(a <= e.y <= b for _, a, b in self._rows):
+            if not (0 <= e.x < w and any(a <= e.y < b for _, a, b in self._rows)):
                 self.close()
             return "break"
 
         def up(e):
+            if not 0 <= e.x < w:
+                self.close()
+                return "break"
             for m, a, b in self._rows:
-                if a <= e.y <= b:
+                if a <= e.y < b:
                     if m.get("available", True):
                         self.set(m["key"], notify=True)
                     elif self.on_blocked:
@@ -1164,14 +1337,21 @@ class Switch(tk.Canvas):
         self.value = bool(value)
         self.command = command
         self._hover = False
+        self._focused = False
         self._progress = None
         self._gen = 0
         self.bind("<Button-1>", lambda e: self.toggle())
         self.configure(takefocus=True)
         self.bind("<space>", lambda e: self.toggle())
         self.bind("<Return>", lambda e: self.toggle())
+        self.bind("<FocusIn>", lambda e: self._set_focus(True))
+        self.bind("<FocusOut>", lambda e: self._set_focus(False))
         self.bind("<Enter>", lambda e: (setattr(self, "_hover", True), self._paint()))
         self.bind("<Leave>", lambda e: (setattr(self, "_hover", False), self._paint()))
+        self._paint()
+
+    def _set_focus(self, focused):
+        self._focused = focused
         self._paint()
 
     def _paint(self):
@@ -1190,7 +1370,10 @@ class Switch(tk.Canvas):
         kx = k0 + (k1 - k0) * p
         r = self.H / 2 - 2
         self.create_oval(kx - r, self.H / 2 - r, kx + r, self.H / 2 + r,
-                         fill=C.N0, outline=C.N0)
+                         fill=C.KNOB, outline=C.KNOB)
+        if self._focused:
+            round_rect(self, 1, 1, self.W - 1, self.H - 1, self.H / 2 - 1,
+                       outline=C.A600, width=1)
 
     def _animate(self):
         """滑块从当前位置滑向目标位置（约 120ms，3 帧）。"""

@@ -77,6 +77,38 @@ class MeetingDetailsTests(GuiTestCase):
             self.wait_for(lambda:any(isinstance(w,tk.Listbox) and w.size() and '详情新名称' in w.get(0)
                                      for w in self.walk(self.app.sheet_layer)))
 
+    def test_open_history_folder_uses_actual_directory_without_selection(self):
+        directory=Path(self.temporary.name)/'会议 记录'
+        with patch.object(support.A,'CAPTION_DIR',directory), patch.object(V.os,'startfile') as launch:
+            self.app.open_history()
+            self.pump()
+            self.button('打开记录文件夹').command()
+            launch.assert_called_once_with(str(directory.resolve()))
+            self.assertTrue(directory.is_dir())
+            self.assertFalse(list(directory.iterdir()))
+        self.assertFalse(self.errors)
+
+    def test_open_history_folder_error_is_visible(self):
+        with patch.object(support.A,'CAPTION_DIR',Path(self.temporary.name)):
+            self.app.open_history()
+            self.pump()
+            with patch.object(V.os,'startfile',side_effect=OSError('拒绝访问')), patch.object(self.app,'_notice') as notice:
+                self.button('打开记录文件夹').command()
+                notice.assert_called_once_with('无法打开记录文件夹：拒绝访问')
+        self.assertFalse(self.errors)
+
+    def test_history_footer_actions_fit_small_window(self):
+        with patch.object(support.A,'CAPTION_DIR',Path(self.temporary.name)):
+            self.app.open_history()
+            self.pump()
+            buttons=[self.button(text) for text in ('打开记录','导出 / 合并所选','续接所选会议','删除','打开记录文件夹','刷新')]
+            for button in buttons:
+                self.assertTrue(button.winfo_ismapped())
+                self.assertEqual(button.winfo_width(),button.winfo_reqwidth())
+                self.assertLessEqual(button.winfo_rootx()+button.winfo_width(),self.root.winfo_rootx()+1000)
+            bounds=sorted((b.winfo_rootx(),b.winfo_rootx()+b.winfo_width()) for b in buttons)
+            self.assertTrue(all(left[1]<=right[0] for left,right in zip(bounds,bounds[1:])))
+
     def test_edit_record_persists_and_reopens(self):
         records=R.load_session(self.path)[1]
         long_session=R.Session(self.path,'项目复盘'*24,self.session.started,1)

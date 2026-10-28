@@ -1,5 +1,5 @@
 #ifndef AppVersion
-  #define AppVersion "0.1.13"
+  #define AppVersion "0.1.14"
 #endif
 #ifndef BinaryPath
   #define BinaryPath "..\dist\TeamsSub.exe"

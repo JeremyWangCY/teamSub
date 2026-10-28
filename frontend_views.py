@@ -350,7 +350,14 @@ def open_history(app):
         for text, action, kind in [('打开记录','view','tint'), ('导出 / 合并所选','export','primary'), ('续接所选会议','resume','ghost')]:
             UK.Pill(row,text,lambda a=action: read(a),kind=kind).pack(side='left',padx=(0,12))
         UK.Pill(row,'删除',do_delete,kind='ghost').pack(side='left',padx=(0,12))
+        def open_records_folder():
+            try:
+                CAPTION_DIR.mkdir(parents=True, exist_ok=True)
+                os.startfile(str(CAPTION_DIR.resolve()))
+            except OSError as exc:
+                app._notice('无法打开记录文件夹：' + str(exc))
         UK.Pill(row,'刷新',refresh,kind='ghost').pack(side='right')
+        UK.Pill(row,'打开记录文件夹',open_records_folder,kind='secondary').pack(side='right',padx=(0,12))
         listing.bind('<Double-Button-1>',lambda e: read('view'))
         refresh()
     app._show_sheet('历史会议', build)

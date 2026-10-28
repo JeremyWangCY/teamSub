@@ -11,6 +11,7 @@ import tkinter as tk
 import tkinter.font as tkfont
 from PIL import Image, ImageDraw, ImageTk
 import math
+import re
 
 
 # ------------------------------------------------------------------ 主题引擎
@@ -691,6 +692,71 @@ def fit_text(value, font, width):
         else:
             high = mid - 1
     return value[:low] + "…"
+
+
+# ---------------------------------------------------------------- 中文断行
+# 断行禁则：行首不能出现的字符 / 行尾不能留下的字符（缺字会看起来像排版事故）
+_NO_LINE_START = set("，。、；：？！）】》」』”’％%,.;:?!)]}…·～·")
+_NO_LINE_END = set("（【《「『“‘([{")
+# 西文单词整体不可拆；汉字逐字可断；其余符号各成一个 token
+_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9'’]*|\s+|.", re.S)
+
+
+def _measure_cache(face):
+    cache = {}
+
+    def width(chunk):
+        if chunk in cache:
+            return cache[chunk]
+        cache[chunk] = face.measure(chunk)
+        return cache[chunk]
+    return width
+
+
+def wrap_cjk(text, font, width, max_lines=0):
+    """按像素宽度手动断行，遵守中文禁则；西文单词不拆开。
+
+    Tk 的 ``wraplength`` 只在空格处断行：中英混排时会出现「现在看 C / 柱」这种
+    被空格提前截断的孤字行，也让「，」跑到行首。这里自己排，宽度用真实字体量。
+    """
+    body = str(text or "")
+    if not body or width <= 0 or not body.strip():
+        return body
+    face = tkfont.Font(font=font)
+    width_of = _measure_cache(face)
+    lines, cur = [], ""
+    for tok in _TOKEN.findall(body):
+        if tok in ("\n", "\r\n"):
+            lines.append(cur.rstrip())
+            cur = ""
+            continue
+        if tok.isspace():
+            if cur:
+                cur += " "
+            continue
+        if cur and width_of(cur + tok) > width:
+            stripped = cur.rstrip()
+            carry = ""
+            # 行尾禁则：开括号不能留在行尾
+            while stripped and stripped[-1] in _NO_LINE_END:
+                carry = stripped[-1] + carry
+                stripped = stripped[:-1].rstrip()
+            if tok in _NO_LINE_START and len(stripped) > 1:
+                # 行首禁则：带上最后一个字一起换行，标点就不会落在行首
+                carry = stripped[-1] + carry
+                stripped = stripped[:-1].rstrip()
+            if stripped:
+                lines.append(stripped)
+            cur = carry + tok
+            continue
+        cur += tok
+    if cur.strip():
+        lines.append(cur.rstrip())
+    if max_lines and len(lines) > max_lines:
+        head = lines[:max_lines]
+        head[-1] = fit_text(head[-1] + "…", font, width)
+        lines = head
+    return "\n".join(lines)
 
 
 # ------------------------------------------------------------------ 细滚动条

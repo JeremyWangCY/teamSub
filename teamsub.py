@@ -28,6 +28,7 @@ import floatbar
 import modes as MD
 import transcript_view as TV
 import ui_kit as UK
+import caption_merge as CM
 
 try:
     import tray as tray_mod          # 系统托盘（pywin32）
@@ -466,16 +467,19 @@ class CaptionReader(threading.Thread):
     """后台线程：轮询当前会议模式的「实时字幕」组，把增量记录推到队列。"""
 
     def __init__(self, out_q: queue.Queue, interval: float = 0.4,
-                 mode: str = "teams"):
+                 mode: str = "teams", merge_gap_ms: int = 1500):
         super().__init__(daemon=True)
         self.q = out_q
         self.interval = interval
         self.mode = mode                  # 会议模式 key（见 modes.py）
+        # 碎句合并：同一人、间隔不超过该值、上一条未收句 → 折成一条
+        self.merge_gap = max(0.0, (merge_gap_ms or 0) / 1000.0)
         self.stop_evt = threading.Event()
         self.paused = False
         self.records = []        # [{name, text, ts}] 已确认 + 进行中
         self.open_pairs = []     # 上一次轮询的 (name, raw, text) 列表
         self.open_records = []   # 与上一帧条目对应的记录，而非只有最后一句
+        self.open_prefix = []    # 被合并的槽位：该行之前已并进去的前缀文本
         self.generation = uuid.uuid4().hex
         self.recent_keys = []    # 已消费的 (姓名, 文本) 指纹，用于防重
         self.last_name = None    # 上一帧最后的说话人，用于兜底继承
@@ -705,6 +709,10 @@ class CaptionReader(threading.Thread):
             return True
         if not la or not lb:
             return False
+        if CM.has_cjk(la) or CM.has_cjk(lb):
+            # 中文没有词边界，「这个方案」→「这个方案周四再确认…」这类
+            # 叠字+补全靠前缀判不出来，改用重叠率
+            return CM.looks_like_revision(la, lb)
         # 忽略标点差异的词级前缀：'ok.' -> 'ok, they say into their bag.'
         ta = re.findall(r"[\w']+", la)
         tb = re.findall(r"[\w']+", lb)
@@ -722,19 +730,30 @@ class CaptionReader(threading.Thread):
                     return True
         return SequenceMatcher(None, la, lb).ratio() >= 0.72
 
+    def _fold_target(self, name, text, now):
+        """新片段要不要折进上一条记录（同一人 / 间隔短 / 上一条没收句）。"""
+        if not self.records or self.first_pass:
+            return None
+        prev = self.records[-1]
+        return prev if CM.should_merge(prev, name, text, now, self.merge_gap) else None
+
     def merge(self, cur):
-        """对齐每个窗口条目：独立插入保持独立，替换才允许更新旧记录。"""
+        """对齐每个窗口条目：改写就地更新，续写折进上一条，其余独立成条。"""
         events = []
         if not cur:
             return events
         old = self.open_pairs
-        prior = self.open_records if len(self.open_records) == len(old) else []
+        ok = len(self.open_records) == len(old) == len(self.open_prefix)
+        prior = self.open_records if ok else []
+        prior_prefix = self.open_prefix if ok else []
         aligned = [None] * len(cur)
+        prefixes = [""] * len(cur)
         matcher = SequenceMatcher(None, [self._key(p) for p in old],
                                   [self._key(p) for p in cur], autojunk=False)
         for tag, a, b, c, d in matcher.get_opcodes():
             if tag == 'equal' and prior:
                 aligned[c:d] = prior[a:b]
+                prefixes[c:d] = prior_prefix[a:b]
             elif tag == 'replace' and prior:
                 # 仅在被替换的窗口槽位中找修订；不能跨越新增条目的边界合并。
                 available = list(range(a, b))
@@ -742,23 +761,40 @@ class CaptionReader(threading.Thread):
                     for i in list(available):
                         if old[i][0] == cur[j][0] and self._same_utterance(old[i][2], cur[j][2]):
                             aligned[j] = prior[i]
+                            prefixes[j] = prior_prefix[i]
                             available.remove(i)
                             break
+        now_dt, now_ts = datetime.now(), time.time()
         for i, (name, raw, text) in enumerate(cur):
-            now = datetime.now()
             rec = aligned[i]
             if rec is not None:
-                if rec['text'] != text:
-                    rec.update(text=text, raw=raw or rec['raw'], backlog=False)
+                full = (prefixes[i] or "") + text
+                if rec['text'] != full:
+                    rec.update(text=full, raw=raw or rec['raw'], backlog=False)
                     rec['revision'] = rec.get('revision', 0) + 1
+                    rec['_seen'] = now_ts
                     events.append(('update', rec))
                 continue
-            rec = {"name": name, "raw": raw, "text": text, "ts": now,
-                   "backlog": self.first_pass, "id": uuid.uuid4().hex, "revision": 0}
-            aligned[i] = rec
+            host = self._fold_target(name, text, now_ts)
+            if host is not None:
+                # 续写：并进上一条，本槽位记住这段前缀，之后它自己被改写时
+                # 只替换前缀之后的部分，不会把上文丢掉
+                base = host['text']
+                host.update(text=CM.join_caption(base, text), raw=raw or host['raw'],
+                            backlog=False)
+                host['revision'] = host.get('revision', 0) + 1
+                host['_seen'] = now_ts
+                aligned[i], prefixes[i] = host, base
+                events.append(('update', host))
+                continue
+            rec = {"name": name, "raw": raw, "text": text, "ts": now_dt,
+                   "backlog": self.first_pass, "id": uuid.uuid4().hex, "revision": 0,
+                   "_seen": now_ts}
+            aligned[i], prefixes[i] = rec, ""
             self.records.append(rec)
             events.append(("new", rec))
         self.open_pairs, self.open_records = list(cur), aligned
+        self.open_prefix = prefixes
         if self.first_pass and cur:
             self.first_pass = False
         return events
@@ -889,7 +925,8 @@ class App:
         self._meeting_txt = f"正在查找 {MD.get(self.mode)['name']}…"
 
         # 采集线程要在模式确定之后创建
-        self.reader = CaptionReader(self.q, mode=self.mode)
+        self.reader = CaptionReader(self.q, mode=self.mode,
+                                  merge_gap_ms=self.tcfg.merge_gap_ms)
         self.reader.simplify = True
 
         UK.set_theme(getattr(self.tcfg, "theme", "light"))
@@ -1344,13 +1381,24 @@ class App:
                 break
         if rec is None:
             rec = next((r for r in reversed(self.records) if (r.get("text") or "").strip()), None)
+        history = []
+        keep = max(0, int(getattr(self.tcfg, "float_prev", 1) or 0))
+        if rec is not None and keep:
+            idx = next((k for k, r in enumerate(self.records) if r is rec), None)
+            while idx is not None and idx > 0 and len(history) < keep:
+                idx -= 1
+                prev = self.records[idx]
+                if (prev.get("text") or "").strip():
+                    history.append(prev)
+            history.reverse()
         sig = (self.display_mode, None if rec is None else (rec.get("name"), rec.get("text"),
-               rec.get("tr"), rec.get("tr_status"), rec.get("ts")))
+               rec.get("tr"), rec.get("tr_status"), rec.get("ts")),
+               tuple((h.get("id"), h.get("text")) for h in history))
         if sig == self._float_sig and not force:
             return
         self._float_sig = sig
         try:
-            self.float_bar.sync(rec)
+            self.float_bar.sync(rec, history)
         except Exception:
             pass
 
@@ -1373,7 +1421,8 @@ class App:
             self.reader.stop()
         except Exception:
             pass
-        self.reader = CaptionReader(self.q, mode=key)
+        self.reader = CaptionReader(self.q, mode=key,
+                              merge_gap_ms=self.tcfg.merge_gap_ms)
         self.reader.paused = self.paused
         self.reader.start()
         # 状态文案复位到「正在查找」
@@ -2291,7 +2340,8 @@ class App:
         self.pending_tr.clear()
         old_reader = self.reader
         old_reader.stop()
-        self.reader = CaptionReader(self.q, mode=self.mode)
+        self.reader = CaptionReader(self.q, mode=self.mode,
+                                  merge_gap_ms=self.tcfg.merge_gap_ms)
         self.reader.paused = self.paused
         self.reader.meeting_title = old_reader.meeting_title
         # 先清空数据与界面，最后才启动新采集线程。反过来写会留下一个可观测的
@@ -2579,7 +2629,8 @@ class App:
                     self.save_store = AsyncCaptionStore(CAPTION_DIR, title, path=session.path,
                         on_error=lambda exc: self.q.put(('save_error', str(exc))))
                     self.save_path = self.save_store.path
-                self.reader = CaptionReader(self.q, mode=self.mode)
+                self.reader = CaptionReader(self.q, mode=self.mode,
+                                  merge_gap_ms=self.tcfg.merge_gap_ms)
                 seed = copy.deepcopy(records)
                 self.reader.records = seed
                 self.reader.open_pairs = [(r['name'],r.get('raw',r['name']),r['text']) for r in seed]

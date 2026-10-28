@@ -93,18 +93,28 @@ class FloatBar:
         self.content.columnconfigure(0, weight=1)
         self._content_window = self.content_canvas.create_window(0, 0, anchor="nw", window=self.content)
         size = getattr(app, "reading_size", 12)
+        self._font_src = (UK.FAMILY, size)
+        self._font_tr = (UK.FAMILY, size + 1, "normal" if UK.theme() == "dark" else "bold")
+        self._font_prev = (UK.FAMILY, max(9, size - 1))
+        self._src_text = ""
+        self._tr_text = ""
+        self._prev_items = []
+        self._wrap_px = 0
+        # 上一条：淡色留在上方当语境，翻译时不用来回切窗口
+        self.prevbox = tk.Frame(self.content, bg=UK.C.FLOAT_BG)
+        self.prevbox.grid(row=0, column=0, sticky="we")
+        self.prevbox.columnconfigure(0, weight=1)
         self.lbl_src = tk.Label(self.content, text="", bg=UK.C.FLOAT_BG, fg=UK.C.FLOAT_TEXT,
-                                font=(UK.FAMILY, size), anchor="nw", justify="left")
-        self.lbl_src.grid(row=0, column=0, sticky="we", pady=(9, 8))
+                                font=self._font_src, anchor="nw", justify="left")
+        self.lbl_src.grid(row=1, column=0, sticky="we", pady=(9, 8))
         self.content_line = tk.Frame(self.content, bg=UK.C.FLOAT_LINE, height=1)
-        self.content_line.grid(row=1, column=0, sticky="we")
+        self.content_line.grid(row=2, column=0, sticky="we")
         self.trrow = tk.Frame(self.content, bg=UK.C.FLOAT_BG)
-        self.trrow.grid(row=2, column=0, sticky="we", pady=(8, 2))
+        self.trrow.grid(row=3, column=0, sticky="we", pady=(8, 2))
         self.trrow.columnconfigure(0, weight=1)
         self.lbl_arrow = tk.Label(self.trrow, text="", bg=UK.C.FLOAT_BG)
         self.lbl_tr = tk.Label(self.trrow, text="", bg=UK.C.FLOAT_BG, fg=UK.C.FLOAT_ACCENT,
-                               font=(UK.FAMILY, size + 1, "normal" if UK.theme() == "dark" else "bold"),
-                               anchor="nw", justify="left")
+                               font=self._font_tr, anchor="nw", justify="left")
         self.lbl_tr.grid(row=0, column=0, sticky="we")
 
         # ---- 右下角缩放手柄 ----
@@ -127,8 +137,9 @@ class FloatBar:
         w.bind("<Configure>", self._on_window_configure)
 
         # ---- 交互 ----
-        for wd in (self.card, body, top, self.content_canvas, self.content, self.lbl_src, self.trrow,
-                   self.lbl_arrow, self.lbl_tr, self.lbl_name, self.lbl_time):
+        for wd in (self.card, body, top, self.content_canvas, self.content, self.prevbox,
+                   self.lbl_src, self.trrow, self.lbl_arrow, self.lbl_tr, self.lbl_name,
+                   self.lbl_time):
             wd.bind("<Button-1>", self._press)
             wd.bind("<B1-Motion>", self._motion)
             wd.bind("<ButtonRelease-1>", self._release)
@@ -154,8 +165,8 @@ class FloatBar:
         self.dot.itemconfigure(self._dot_id, image=self._dot_image)
         self._dot_color = color
 
-    def sync(self, rec):
-        """灌入最新一条记录；rec 为 None 时显示空态。"""
+    def sync(self, rec, history=()):
+        """灌入最新一条记录；history 为之前的若干条（淡色留在上方当语境）。"""
         text, translation = "", ""
         color = UK.C.FLOAT_ACCENT
         mode = getattr(self.app, "display_mode", "both")
@@ -183,8 +194,11 @@ class FloatBar:
                     translation, color = "翻译失败", UK.C.RED
                 elif not translation and mode == "translation":
                     translation, color = "暂无译文", UK.C.FLOAT_MUTED
-        self.lbl_src.configure(text=text, fg=UK.C.FLOAT_MUTED if rec is None else UK.C.FLOAT_TEXT)
-        self.lbl_tr.configure(text=translation, fg=color)
+        self._src_text = text
+        self._tr_text = translation
+        self._prev_items = [r for r in history if (r.get("text") or "").strip()]
+        self.lbl_src.configure(fg=UK.C.FLOAT_MUTED if rec is None else UK.C.FLOAT_TEXT)
+        self.lbl_tr.configure(fg=color)
         if text:
             self.lbl_src.grid()
         else:
@@ -197,8 +211,35 @@ class FloatBar:
             self.content_line.grid()
         else:
             self.content_line.grid_remove()
+        self._apply_wrap()
         self.content_canvas.yview_moveto(0)
         self._fit()
+
+    def _render_history(self):
+        """上一句：小一号的灰色原文，最多两行，超出省略。"""
+        for child in self.prevbox.winfo_children():
+            child.destroy()
+        if not self._prev_items:
+            self.prevbox.grid_remove()
+            return
+        self.prevbox.grid()
+        # 只看译文时，上一句也优先给译文，避免两种语言交替打断阅读
+        translated_only = getattr(self.app, "display_mode", "both") == "translation"
+        for row, rec in enumerate(self._prev_items):
+            last = row == len(self._prev_items) - 1
+            body = rec.get("text") or ""
+            if translated_only and (rec.get("tr") or "").strip():
+                body = rec["tr"]
+            label = tk.Label(self.prevbox, text="", bg=UK.C.FLOAT_BG, fg=UK.C.FLOAT_MUTED,
+                             font=self._font_prev, anchor="nw", justify="left", wraplength=0)
+            label.grid(row=row, column=0, sticky="we", pady=(0, 8 if last else 4))
+            label.configure(text=UK.wrap_cjk(body, self._font_prev,
+                                             self._wrap_px, max_lines=2))
+            label.bind("<Button-1>", self._press)
+            label.bind("<B1-Motion>", self._motion)
+            label.bind("<ButtonRelease-1>", self._release)
+            label.bind("<Double-Button-1>", lambda e: self.back_to_main())
+            label.bind("<MouseWheel>", self._scroll_content)
 
     def _scroll_content(self, event):
         self.content_canvas.yview_scroll(-int(event.delta / 120), "units")
@@ -275,15 +316,20 @@ class FloatBar:
             pass
 
     def _apply_wrap(self):
-        """文字随窗口宽度换行。"""
+        """文字随窗口宽度换行（自己排，见 UK.wrap_cjk）。"""
         if hasattr(self, '_full_name'):
             self.lbl_name.configure(text=UK.fit_text(self._full_name, UK.F_NAME, max(24, self.w - 240)))
         usable = max(120, self.w - 2 * self.card.pad - 10)
         if self.scroll.winfo_manager():
             usable = max(120, usable - 18)
         self.content_canvas.itemconfigure(self._content_window, width=usable)
-        self.lbl_src.configure(wraplength=usable - 4)
-        self.lbl_tr.configure(wraplength=usable - 4)
+        self._wrap_px = max(60, usable - 6)
+        # wraplength=0：交给 wrap_cjk 断行，避免 Tk 只在空格处断造成的孤字行
+        self.lbl_src.configure(wraplength=0,
+                               text=UK.wrap_cjk(self._src_text, self._font_src, self._wrap_px))
+        self.lbl_tr.configure(wraplength=0,
+                              text=UK.wrap_cjk(self._tr_text, self._font_tr, self._wrap_px))
+        self._render_history()
 
     def _fit(self):
         """自适应内容；超长字幕限制高度并提供滚动。"""

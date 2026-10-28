@@ -3,7 +3,9 @@ import threading
 import tkinter as tk
 from tkinter import messagebox, simpledialog
 import ui_kit as UK
-from translator import all_topics, TOPICS, TranslationService
+from translator import (all_topics, TOPICS, TranslationService,
+                        REASONING_LABELS, REASONING_TITLES)
+import translator as TR
 
 def open_settings(self, page="服务"):
     """Tabbed settings, drafts validated before applying to the running service."""
@@ -79,6 +81,35 @@ def open_settings(self, page="服务"):
         e_base=field(form,'Base URL',self.tcfg.base_url,1,span=2)
         e_key=field(form,'API Key',self.tcfg.api_key,2,secret=True)
         e_region=field(form,'Azure 区域',self.tcfg.azure_region,2,1)
+
+        # 思考强度：不是每家上游都认，旁边的「检测」会把实际可用的字段记下来
+        reason_cell=cell(form,'思考强度（仅 OpenAI 兼容引擎）',3)
+        sel_reason=UK.Select(reason_cell,list(REASONING_LABELS),
+                             value=REASONING_TITLES.get(self.tcfg.reasoning,'自动'),
+                             bg=W,height=36)
+        sel_reason.pack(fill='x')
+        probe_cell=cell(form,'上游支持',3,1)
+        probe_row=tk.Frame(probe_cell,bg=W)
+        probe_row.pack(fill='x')
+        lbl_probe=tk.Label(probe_row,text='未检测',bg=W,fg=UK.C.T3,font=UK.F_MINI,anchor='w')
+        lbl_probe.pack(side='left')
+
+        def do_probe():
+            level=REASONING_LABELS.get(sel_reason.get(),'auto')
+            lbl_probe.configure(text='检测中…',fg=UK.C.T3)
+
+            def apply(text):
+                lbl_probe.configure(text=text[:60],fg=UK.C.SUB)
+
+            def work():
+                try:
+                    _, message = TR.probe_reasoning(self.tcfg, level)
+                except Exception as exc:
+                    message = f'检测失败：{exc}'
+                self.q.put(('ui',(apply,message)))
+            threading.Thread(target=work,daemon=True).start()
+
+        UK.Pill(probe_row,'检测',do_probe,kind='ghost',bg=W,height=30,padx=10).pack(side='right')
 
         def snapshot_profile():
             profiles[active_profile['name']] = {
@@ -201,10 +232,11 @@ def open_settings(self, page="服务"):
         advanced=[('短句上下文阈值','ctx_min_len',0,10000),('上下文最大字符','ctx_max_chars',0,100000),
                   ('新句后等待 ms','supersede_grace_ms',150,60000),('启动补译上限','backlog_max',0,10000),
                   ('合批等待 ms','batch_window_ms',0,60000),('请求间隔 ms','min_interval_ms',0,60000),
-                  ('请求超时 s','timeout_s',1,300),('重试次数','max_retry',0,10)]
+                  ('请求超时 s','timeout_s',1,300),('重试次数','max_retry',0,10),
+                  ('碎句合并 ms','merge_gap_ms',0,10000)]
         positions={'ctx_min_len':(2,1,0),'ctx_max_chars':(2,1,1),'supersede_grace_ms':(2,1,2),
                    'backlog_max':(2,2,0),'batch_window_ms':(3,1,0),'min_interval_ms':(3,1,1),
-                   'timeout_s':(3,1,2),'max_retry':(3,2,0)}
+                   'timeout_s':(3,1,2),'max_retry':(3,2,0),'merge_gap_ms':(2,2,1)}
         extras={}
         for title,attr,low,high in advanced:
             page,row,col=positions[attr]
@@ -485,6 +517,7 @@ def open_settings(self, page="服务"):
             self.tcfg.engine = {"openai 兼容": "openai", "DeepL": "deepl",
                                 "Azure": "azure"}[sel_engine.get()]
             self.tcfg.base_url = e_base.get().strip()
+            self.tcfg.reasoning = REASONING_LABELS.get(sel_reason.get(), 'auto')
             self.tcfg.model = e_model.get().strip()
             self.tcfg.api_key = e_key.get().strip()
             self.tcfg.azure_region = e_region.get().strip()
@@ -501,6 +534,8 @@ def open_settings(self, page="服务"):
             # glossary_mode 保留在配置里（旧配置能读、能存），但界面不再提供开关。
             self.tcfg.glossary = ""
             self.settle_sec = self.tcfg.settle_ms / 1000.0
+            # 采集线程在跑，合并窗口立即生效，不必重启
+            self.reader.merge_gap = max(0.0, self.tcfg.merge_gap_ms / 1000.0)
             self.tcfg.topics_custom = {}
             self._persist_topics(order, topics)
 

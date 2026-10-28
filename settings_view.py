@@ -82,35 +82,6 @@ def open_settings(self, page="服务"):
         e_key=field(form,'API Key',self.tcfg.api_key,2,secret=True)
         e_region=field(form,'Azure 区域',self.tcfg.azure_region,2,1)
 
-        # 思考强度：不是每家上游都认，旁边的「检测」会把实际可用的字段记下来
-        reason_cell=cell(form,'思考强度（仅 OpenAI 兼容引擎）',3)
-        sel_reason=UK.Select(reason_cell,list(REASONING_LABELS),
-                             value=REASONING_TITLES.get(self.tcfg.reasoning,'自动'),
-                             bg=W,height=36)
-        sel_reason.pack(fill='x')
-        probe_cell=cell(form,'上游支持',3,1)
-        probe_row=tk.Frame(probe_cell,bg=W)
-        probe_row.pack(fill='x')
-        lbl_probe=tk.Label(probe_row,text='未检测',bg=W,fg=UK.C.T3,font=UK.F_MINI,anchor='w')
-        lbl_probe.pack(side='left')
-
-        def do_probe():
-            level=REASONING_LABELS.get(sel_reason.get(),'auto')
-            lbl_probe.configure(text='检测中…',fg=UK.C.T3)
-
-            def apply(text):
-                lbl_probe.configure(text=text[:60],fg=UK.C.SUB)
-
-            def work():
-                try:
-                    _, message = TR.probe_reasoning(self.tcfg, level)
-                except Exception as exc:
-                    message = f'检测失败：{exc}'
-                self.q.put(('ui',(apply,message)))
-            threading.Thread(target=work,daemon=True).start()
-
-        UK.Pill(probe_row,'检测',do_probe,kind='ghost',bg=W,height=30,padx=10).pack(side='right')
-
         def snapshot_profile():
             profiles[active_profile['name']] = {
                 'engine': {'openai 兼容':'openai', 'DeepL':'deepl', 'Azure':'azure'}[sel_engine.get()],
@@ -241,6 +212,36 @@ def open_settings(self, page="服务"):
         for title,attr,low,high in advanced:
             page,row,col=positions[attr]
             extras[attr]=field(pages[page],title,getattr(self.tcfg,attr),row,col)
+
+        # 思考强度属于请求参数：换一家上游可能不认某个字段，所以配一个探测
+        reason_cell=cell(pages[3],'思考强度',2,1)
+        sel_reason=UK.Select(reason_cell,list(REASONING_LABELS),
+                             value=REASONING_TITLES.get(self.tcfg.reasoning,'自动'),
+                             bg=W,height=36)
+        sel_reason.pack(fill='x')
+        probe_cell=cell(pages[3],'上游支持',2,2)
+        probe_row=tk.Frame(probe_cell,bg=W)
+        probe_row.pack(fill='x')
+        lbl_probe=tk.Label(probe_row,text='未检测',bg=W,fg=UK.C.T3,font=UK.F_MINI,anchor='w')
+        lbl_probe.pack(side='left',pady=(8,0))
+
+        def do_probe():
+            level=REASONING_LABELS.get(sel_reason.get(),'auto')
+            lbl_probe.configure(text='检测中…',fg=UK.C.T3)
+
+            def apply(text):
+                lbl_probe.configure(text=text,fg=UK.C.SUB)
+
+            def work():
+                try:
+                    field_name, message = TR.probe_reasoning(self.tcfg, level)
+                except Exception as exc:
+                    field_name, message = '', f'检测失败：{exc}'
+                mark = '✓ ' if field_name else '✗ '
+                self.q.put(('ui',(apply,(mark+message)[:46])))
+            threading.Thread(target=work,daemon=True).start()
+
+        UK.Pill(probe_row,'检测',do_probe,kind='ghost',bg=W,height=30,padx=10).pack(side='right')
         usage_labels = {}
         for i,(title,key) in enumerate([('输入 tokens','input_tokens'),('输出 tokens','output_tokens'),
                                         ('缓存命中 tokens','cache_hit_tokens'),('缓存未命中 tokens','cache_miss_tokens'),

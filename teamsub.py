@@ -1393,7 +1393,7 @@ class App:
             history.reverse()
         sig = (self.display_mode, None if rec is None else (rec.get("name"), rec.get("text"),
                rec.get("tr"), rec.get("tr_status"), rec.get("ts")),
-               tuple((h.get("id"), h.get("text")) for h in history))
+               tuple((h.get("id"), h.get("text"), h.get("tr"), h.get("tr_status")) for h in history))
         if sig == self._float_sig and not force:
             return
         self._float_sig = sig

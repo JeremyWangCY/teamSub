@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import tkinter as tk
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from PIL import ImageTk, ImageChops
 import frontend_views as V
 import meeting_export as E
@@ -134,6 +134,30 @@ class MeetingDetailsTests(GuiTestCase):
         markdown=self.path.with_suffix('.md').read_text(encoding='utf-8')
         self.assertIn('修正原文',markdown);self.assertIn('修正译文',markdown)
         self.assertIn('修正译文',E.format_meeting(self.session.title,[saved]))
+
+    def test_previous_caption_translation_refreshes_without_current_change(self):
+        previous=dict(id='prev',name='Alex',text='Previous sentence',tr='',tr_status='pending')
+        current=dict(id='current',name='Bo',text='Current sentence',tr='当前句',tr_status='ok')
+        self.app.records=[previous,current]
+        self.app.view_indices=[0,1]
+        self.app.display_mode='translation'
+        self.app.tcfg.float_prev=1
+        self.app.float_on=True
+        self.app.float_bar=Mock()
+        self.app.float_sync()
+        self.assertEqual(self.app.float_bar.sync.call_count,1)
+        self.app.float_sync()
+        self.assertEqual(self.app.float_bar.sync.call_count,1)
+        previous.update(tr='上一句译文',tr_status='ok')
+        self.app.float_sync()
+        self.assertEqual(self.app.float_bar.sync.call_count,2)
+        self.assertIs(self.app.float_bar.sync.call_args.args[0],current)
+        self.assertEqual(self.app.float_bar.sync.call_args.args[1],[previous])
+        self.app.float_sync()
+        self.assertEqual(self.app.float_bar.sync.call_count,2)
+        previous['tr']='人工修正上一句'
+        self.app.float_sync()
+        self.assertEqual(self.app.float_bar.sync.call_count,3)
 
     def test_float_dot_is_symmetric_and_has_clearance(self):
         from floatbar import FloatBar

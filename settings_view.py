@@ -38,7 +38,8 @@ def open_settings(self, page="服务"):
         def lab(parent,text):
             return tk.Label(parent,text=text,bg=W,fg=UK.C.SUB,font=UK.F_SMALL,anchor='w')
         def cell(parent,title,row,col=0,span=1):
-            for c in range(3 if parent in (pages[2],pages[3]) else 2):parent.columnconfigure(c,weight=1,uniform='field')
+            wide = parent in (pages[0], pages[2], pages[3])
+            for c in range(3 if wide else 2):parent.columnconfigure(c,weight=1,uniform='field')
             frame=tk.Frame(parent,bg=W)
             frame.grid(row=row,column=col,columnspan=span,sticky='we',padx=(0,16 if col==0 and span==1 else 0),pady=(0,8))
             lab(frame,title).pack(anchor='w',pady=(0,4))
@@ -77,10 +78,43 @@ def open_settings(self, page="服务"):
         sel_engine=UK.Select(engine_cell,['openai 兼容','DeepL','Azure'],bg=W,height=36,
             value={'openai':'openai 兼容','deepl':'DeepL','azure':'Azure'}.get(self.tcfg.engine,'openai 兼容'))
         sel_engine.pack(fill='x')
-        e_model=field(form,'模型',self.tcfg.model,0,1)
-        e_base=field(form,'Base URL',self.tcfg.base_url,1,span=2)
+        e_model=field(form,'模型',self.tcfg.model,0,1,span=2)
+        e_base=field(form,'Base URL',self.tcfg.base_url,1,span=3)
         e_key=field(form,'API Key',self.tcfg.api_key,2,secret=True)
         e_region=field(form,'Azure 区域',self.tcfg.azure_region,2,1)
+
+        # 思考强度：不是每家上游都认这个字段，旁边配一个探测，结果用底部提示条回话
+        reason_cell=cell(form,'思考强度',2,2)
+        reason_row=tk.Frame(reason_cell,bg=W)
+        reason_row.pack(fill='x')
+        sel_reason=UK.Select(reason_row,list(REASONING_LABELS),
+                             value=REASONING_TITLES.get(self.tcfg.reasoning,'自动'),
+                             bg=W,height=36)
+        sel_reason.pack(side='left',fill='x',expand=True)
+        probing={'on':False}
+
+        def do_probe():
+            if probing['on']:
+                return
+            probing['on']=True
+            level=REASONING_LABELS.get(sel_reason.get(),'auto')
+            self.flash('正在检测上游是否支持思考参数…')
+
+            def apply(text):
+                probing['on']=False
+                self.flash(text)
+
+            def work():
+                try:
+                    field_name, message = TR.probe_reasoning(self.tcfg, level)
+                except Exception as exc:
+                    field_name, message = '', f'检测失败：{exc}'
+                self.q.put(('ui',(apply,('✓ ' if field_name else '✗ ')+message)))
+
+            threading.Thread(target=work,daemon=True).start()
+
+        UK.Pill(reason_row,'检测',do_probe,kind='ghost',bg=W,height=36,padx=10).pack(
+            side='left',padx=(6,0))
 
         def snapshot_profile():
             profiles[active_profile['name']] = {
@@ -213,35 +247,6 @@ def open_settings(self, page="服务"):
             page,row,col=positions[attr]
             extras[attr]=field(pages[page],title,getattr(self.tcfg,attr),row,col)
 
-        # 思考强度属于请求参数：换一家上游可能不认某个字段，所以配一个探测
-        reason_cell=cell(pages[3],'思考强度',2,1)
-        sel_reason=UK.Select(reason_cell,list(REASONING_LABELS),
-                             value=REASONING_TITLES.get(self.tcfg.reasoning,'自动'),
-                             bg=W,height=36)
-        sel_reason.pack(fill='x')
-        probe_cell=cell(pages[3],'上游支持',2,2)
-        probe_row=tk.Frame(probe_cell,bg=W)
-        probe_row.pack(fill='x')
-        lbl_probe=tk.Label(probe_row,text='未检测',bg=W,fg=UK.C.T3,font=UK.F_MINI,anchor='w')
-        lbl_probe.pack(side='left',pady=(8,0))
-
-        def do_probe():
-            level=REASONING_LABELS.get(sel_reason.get(),'auto')
-            lbl_probe.configure(text='检测中…',fg=UK.C.T3)
-
-            def apply(text):
-                lbl_probe.configure(text=text,fg=UK.C.SUB)
-
-            def work():
-                try:
-                    field_name, message = TR.probe_reasoning(self.tcfg, level)
-                except Exception as exc:
-                    field_name, message = '', f'检测失败：{exc}'
-                mark = '✓ ' if field_name else '✗ '
-                self.q.put(('ui',(apply,(mark+message)[:46])))
-            threading.Thread(target=work,daemon=True).start()
-
-        UK.Pill(probe_row,'检测',do_probe,kind='ghost',bg=W,height=30,padx=10).pack(side='right')
         usage_labels = {}
         for i,(title,key) in enumerate([('输入 tokens','input_tokens'),('输出 tokens','output_tokens'),
                                         ('缓存命中 tokens','cache_hit_tokens'),('缓存未命中 tokens','cache_miss_tokens'),

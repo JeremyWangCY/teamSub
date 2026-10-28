@@ -317,6 +317,45 @@ def is_translatable(text: str) -> bool:
 SENT_END = re.compile(r"[.?!。？！…]\s*$")
 
 
+# ---------------------------------------------------------------- 思考强度
+# 各家表达「想多深」的字段名并不统一，因此这里按「最标准 → 最兼容」排成一列
+# 候选；请求时逐个试，被上游拒绝就换下一个，命中的那个记进配置不再重复试。
+REASONING_LEVELS = ("auto", "off", "low", "medium", "high")
+REASONING_LABELS = {"自动": "auto", "关": "off", "低": "low", "中": "medium", "高": "high"}
+REASONING_TITLES = {value: key for key, value in REASONING_LABELS.items()}
+# 判定「上游不接受这个参数」的错误特征；命中才降级重试，其余错误照旧上抛
+_REJECT_HINTS = ("reasoning_effort", "reasoning", "thinking", "unknown", "unsupported",
+                 "not support", "unrecognized", "invalid_request", "extra fields",
+                 "additional properties", "not allowed")
+
+
+def reasoning_candidates(level: str):
+    """把档位翻译成候选请求字段：[(字段名, {payload 片段})]，无候选表示不改请求。"""
+    level = (level or "auto").lower()
+    if level not in ("off", "low", "medium", "high"):
+        return []
+    enabled = level != "off"
+    effort = "minimal" if level == "off" else level
+    budget = {"off": 0, "low": 1024, "medium": 2048, "high": 4096}.get(level, 2048)
+    out = [("reasoning_effort", {"reasoning_effort": effort})]
+    if enabled:
+        out.append(("thinking", {"thinking": {"type": "enabled"}}))
+        out.append(("thinking_budget", {"thinking": {"type": "enabled", "budget_tokens": budget}}))
+    else:
+        out.append(("thinking", {"thinking": {"type": "disabled"}}))
+    out.append(("enable_thinking", {"enable_thinking": enabled}))
+    out.append(("chat_template_kwargs", {"chat_template_kwargs": {"enable_thinking": enabled}}))
+    return out
+
+
+def rejected_by_param(error: BaseException, field: str) -> bool:
+    """上游是否因为「不认识这个字段」而拒绝；用于决定要不要换下一个候选。"""
+    text = str(error or "").lower()
+    if not text.startswith("http 400") and not text.startswith("http 422"):
+        return False
+    return any(hint in text for hint in _REJECT_HINTS) or field.lower() in text
+
+
 def is_sentence_end(text: str) -> bool:
     """句末判定：ASR 已给出终止标点，说明这句话在语法上闭合。
 
@@ -357,11 +396,14 @@ class Config:
     api_key: str = ""
     azure_region: str = ""
     mode: str = "auto"                      # auto | zh | en
+    reasoning: str = "auto"                 # 思考强度：auto | off | low | medium | high
+    reasoning_field: str = ""               # 上游实际接受的字段名（探测后记住）
     reading_size: int = 12
     reading_density: str = "comfort"
     theme: str = "light"                   # light | dark（界面外观）
     float_bar: bool = False                 # 悬浮字幕窗开启
     float_on_min: bool = False              # 主窗口最小化时自动切悬浮窗
+    float_prev: int = 1                     # 悬浮窗上方保留几条上一句（0 = 只看当前句）
     float_w: int = 460                      # 悬浮条宽度（可拖拽，记住上次尺寸）
     float_h: int = 0                        # 悬浮条高度；0 = 按内容自适应
     meeting_mode: str = "teams"             # 会议模式 key（见 modes.py）
@@ -376,6 +418,7 @@ class Config:
     sentence_end_grace_ms: int = 450        # 句末标点 + 该时长无变化 → 立即翻译
     supersede_grace_ms: int = 250           # 已被新句顶掉 → 该时长后立即翻译
     settle_ms: int = 1200                   # 兜底：无标点且未被顶掉时的等待上限
+    merge_gap_ms: int = 1500                # 碎句合并窗口：同人 + 上一条未收句，超过则不折（0 = 关闭）
     concurrency: int = 3                    # 并发在途请求数（吞吐 ≈ 并发/单请求耗时）
     backlog_max: int = 12                   # 启动时最多自动补译多少条历史字幕
     batch_size: int = 4                     # 单请求最多合并几条
@@ -658,15 +701,37 @@ class OpenAICompatProvider(Provider):
             ],
         }
         self.usage = None
-        data = self._post(base, payload,
-                          {"Authorization": f"Bearer {self.cfg.api_key}"},
-                          self.cfg.timeout_s)
+        data, last_field = self._post_with_reasoning(
+            base, payload, {"Authorization": f"Bearer {self.cfg.api_key}"},
+            self.cfg.timeout_s)
+        # 记在内存里即可：下次请求直接命中，不必再失败一遍；持久化交给设置里的探测
+        self.cfg.reasoning_field = last_field
         self.usage = parse_token_usage(data.get("usage")) if isinstance(data, dict) else None
         try:
             content = data["choices"][0]["message"]["content"]
         except Exception as e:
             raise TransientError(f"响应结构异常: {str(data)[:200]}") from e
         return self._parse(content, len(texts))
+
+    def _post_with_reasoning(self, url, payload, headers, timeout):
+        """按配置的思考强度发请求；上游不认这个字段就换下一个候选。
+
+        思考强度是纯可选项：没有配置时请求与原版完全一致，不会引入额外调用。
+        """
+        candidates = reasoning_candidates(getattr(self.cfg, "reasoning", "auto"))
+        if not candidates:
+            return self._post(url, payload, headers, timeout), ""
+        known = (getattr(self.cfg, "reasoning_field", "") or "").strip()
+        ordered = sorted(candidates, key=lambda item: 0 if item[0] == known else 1)
+        last = None
+        for name, extra in ordered:
+            try:
+                return self._post(url, {**payload, **extra}, headers, timeout), name
+            except PermanentError as exc:
+                last = exc
+                if not rejected_by_param(exc, name):
+                    raise
+        raise last
 
     @staticmethod
     def _parse(content: str, n: int) -> list[str]:
@@ -742,6 +807,50 @@ def build_provider(cfg: Config, fallback=False) -> Provider:
     sub.api_key = cfg.fallback_api_key
     cls = PROVIDERS.get(sub.engine, OpenAICompatProvider)
     return cls(sub)
+
+
+def probe_reasoning(cfg: Config, level: str = "", timeout: float = 0) -> tuple:
+    """探测上游认哪个思考字段：返回 (字段名, 人话说明)。
+
+    发一条极短请求，逐个尝试候选字段；被「不认识这个参数」拒绝就换下一个。
+    命中后写回 ``cfg.reasoning_field`` 并落盘，后续请求不必再失败重试。
+    """
+    if getattr(cfg, "engine", "openai") != "openai":
+        return "", "当前引擎不支持思考参数（只有 OpenAI 兼容引擎有）"
+    base = (cfg.base_url or "").rstrip("/")
+    if not base:
+        return "", "未配置 Base URL"
+    url = base if base.endswith("/chat/completions") else base + "/chat/completions"
+    level = (level or getattr(cfg, "reasoning", "auto") or "auto").lower()
+    if level not in ("off", "low", "medium", "high"):
+        level = "medium"                      # 自动档用中档探测，能区分「支持/不支持」
+    if not cfg.model:
+        return "", "未配置模型"
+    provider = OpenAICompatProvider(cfg)
+    payload = {
+        "model": cfg.model,
+        "temperature": 0,
+        "stream": False,
+        "messages": [{"role": "user", "content": '只回复两个字：好的'}],
+    }
+    headers = {"Authorization": f"Bearer {cfg.api_key}"}
+    for name, extra in reasoning_candidates(level):
+        try:
+            provider._post(url, {**payload, **extra}, headers, timeout or cfg.timeout_s)
+        except PermanentError as exc:
+            if rejected_by_param(exc, name):
+                continue
+            return "", f"请求被拒绝：{exc}"
+        except TransientError as exc:
+            return "", f"网络或服务异常：{exc}"
+        cfg.reasoning_field = name
+        try:
+            cfg.save()
+        except Exception:
+            pass
+        title = REASONING_TITLES.get(level, level)
+        return name, f"上游接受 {name}（{title}档可用）"
+    return "", "上游不接受任何思考参数，会按模型默认行为出字"
 
 
 # ---------------------------------------------------------------- 调度

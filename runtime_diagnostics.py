@@ -65,7 +65,7 @@ def _check_dpapi(_directory):
     import win32crypt
 
     fixture = secrets.token_bytes(32)
-    encrypted = win32crypt.CryptProtectData(fixture, 'TeamsSub self-test', None, None, None, 0)
+    encrypted = win32crypt.CryptProtectData(fixture, 'TeamSub self-test', None, None, None, 0)
     _, restored = win32crypt.CryptUnprotectData(encrypted, None, None, None, 0)
     return restored == fixture
 

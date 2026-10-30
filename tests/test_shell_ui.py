@@ -73,6 +73,60 @@ class IconTests(unittest.TestCase):
             second.destroy()
 
 
+class RowListTests(unittest.TestCase):
+    def setUp(self):
+        self.root = tk.Tk()
+        self.root.geometry('400x300')
+        self.rows = UK.RowList(self.root)
+        self.rows.pack(fill='both', expand=True)
+        for i in range(5):
+            self.rows.insert('end', f'row {i}', title=f'标题 {i}', meta='meta')
+        self.events = []
+        self.rows.bind('<<ListboxSelect>>', lambda e: self.events.append(self.rows.curselection()))
+        self.root.update()
+
+    def tearDown(self):
+        self.root.destroy()
+
+    def click(self, row, state=0):
+        y = row * UK.RowList.ROW_H + 10
+        self.rows._click(type('E', (), {'x': 20, 'y': y, 'state': state})())
+        self.root.update()
+
+    def test_listbox_compatible_api(self):
+        self.assertEqual(self.rows.size(), 5)
+        self.assertEqual(self.rows.get(2), 'row 2')
+        self.rows.selection_set(1, 'end')
+        self.assertEqual(self.rows.curselection(), (1, 2, 3, 4))
+        self.rows.selection_clear(0, 'end')
+        self.assertEqual(self.rows.curselection(), ())
+        self.rows.delete(0, 'end')
+        self.assertEqual(self.rows.size(), 0)
+        # 程序改选择不发事件（与 Listbox 一致），刷新列表不会误清提示
+        self.assertEqual(self.events, [])
+
+    def test_click_ctrl_and_shift_selection(self):
+        self.click(1)
+        self.click(3, state=0x0004)            # Ctrl 增选
+        self.assertEqual(self.rows.curselection(), (1, 3))
+        self.click(1, state=0x0004)            # Ctrl 取消
+        self.assertEqual(self.rows.curselection(), (3,))
+        self.click(0, state=0x0001)            # Shift 连选到锚点（最后点的那行）
+        self.assertEqual(self.rows.curselection(), (0, 1))
+        self.click(3)
+        self.click(1, state=0x0001)
+        self.assertEqual(self.rows.curselection(), (1, 2, 3))
+        self.assertEqual(len(self.events), 6)
+
+    def test_keyboard_moves_selection(self):
+        self.click(0)
+        self.rows._step(1, None)
+        self.rows._step(1, None)
+        self.assertEqual(self.rows.curselection(), (2,))
+        self.rows._select_all()
+        self.assertEqual(self.rows.curselection(), (0, 1, 2, 3, 4))
+
+
 class ShellLayoutTests(ShellTestCase):
     def test_nav_pages_cover_live_header_and_have_no_back(self):
         self.start()

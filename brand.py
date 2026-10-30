@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-brand —— TeamsSub 标识
+brand —— TeamSub 标识
 ======================
 一份绘制逻辑同时用于 teamsub.ico（任务栏、托盘、安装包）和界面里的品牌标。
 

@@ -29,9 +29,9 @@ class FloatBar:
         w = self.win
         w.overrideredirect(True)
         # 必须给窗口一个标题：单实例接管要靠 EnumWindows + 标题前缀认出
-        # 「哪个窗口属于 TeamsSub」。overrideredirect 窗口不显示标题栏，但
+        # 「哪个窗口属于 TeamSub」。overrideredirect 窗口不显示标题栏，但
         # 窗口文本照样存在；标题为空时新实例找不到任何窗口，只能放弃启动。
-        w.title("TeamsSub 悬浮字幕")
+        w.title("TeamSub 悬浮字幕")
         w.attributes("-topmost", True)
         w.attributes("-alpha", ALPHA)
         # 窗口底色取卡片填充色：卡片圆角外那圈像素与卡面同色，裁圆角后

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-TeamsSub 翻译子系统
+TeamSub 翻译子系统
 ===================
 职责边界（与 UI 完全解耦）：
   1. 语言判定与目标语言决策      detect_lang / decide_target
@@ -39,7 +39,7 @@ def _data_home() -> Path:
 
 
 APP_DIR = _data_home()
-DATA_DIR = Path(os.environ.get("TEAMSSUB_DATA_DIR", APP_DIR))
+DATA_DIR = Path(os.environ.get("TEAMSUB_DATA_DIR", APP_DIR))
 CONFIG_PATH = DATA_DIR / "appconfig.json"
 
 # ---------------------------------------------------------------------------
@@ -58,7 +58,7 @@ def _protect(text: str) -> str:
         import base64
         import win32crypt
         blob = win32crypt.CryptProtectData(
-            text.encode("utf-8"), "TeamsSub", None, None, None, 0)
+            text.encode("utf-8"), "TeamSub", None, None, None, 0)
         return _DPAPI_PREFIX + base64.b64encode(blob).decode("ascii")
     except Exception:
         return text

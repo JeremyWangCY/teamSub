@@ -40,7 +40,7 @@ print(json.dumps(out))
 
 class DpiScaleTests(unittest.TestCase):
     def test_scale_layer_converts_logical_pixels(self):
-        env = dict(os.environ, TEAMSSUB_DATA_DIR=tempfile.mkdtemp(prefix="ts-dpi-"))
+        env = dict(os.environ, TEAMSUB_DATA_DIR=tempfile.mkdtemp(prefix="ts-dpi-"))
         res = subprocess.run([sys.executable, "-c", PROBE], cwd=ROOT, env=env,
                              capture_output=True, text=True, timeout=60)
         self.assertEqual(res.returncode, 0, res.stderr)

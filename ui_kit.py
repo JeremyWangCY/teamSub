@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-ui_kit —— TeamsSub 的视觉层组件
+ui_kit —— TeamSub 的视觉层组件
 ===============================
 设计取向：暖灰底色、圆角与低饱和蓝色；按钮仅用蓝、灰、柔红三类。
 
@@ -1687,6 +1687,225 @@ class ModeSwitch(tk.Canvas):
             self._paint()
         if notify and self.command:
             self.command(key)
+
+
+# ------------------------------------------------------------------ 行列表
+class RowList(tk.Canvas):
+    """两行式可多选列表（标题 + 元信息，右侧附注），替代原生 Listbox。
+
+    对外保留 Listbox 的常用子集：insert/delete/get/size、selection_set/
+    selection_clear/curselection、yview 系列，用户改选时发 <<ListboxSelect>>，
+    业务代码与测试可以照旧按 Listbox 的方式驱动。
+    """
+
+    ROW_H = 54
+
+    def __init__(self, master, bg=None, font=None):
+        self.bgcol = C.N0 if bg is None else bg
+        super().__init__(master, bg=self.bgcol, highlightthickness=0, bd=0,
+                         height=1, takefocus=True, yscrollincrement=self.ROW_H)
+        self.items = []          # [{"text","title","meta","aside"}]
+        self.sel = set()
+        self._anchor = None
+        self._hover = -1
+        self._focused = False
+        self.font = font or F_UI
+        self.bind("<Configure>", lambda e: self._paint())
+        self.bind("<Button-1>", self._click)
+        self.bind("<Motion>", self._motion)
+        self.bind("<Leave>", lambda e: self._set_hover(-1))
+        self.bind("<MouseWheel>", lambda e: (self.yview_scroll(int(-e.delta / 120), "units"), "break")[1])
+        self.bind("<Up>", lambda e: self._step(-1, e))
+        self.bind("<Down>", lambda e: self._step(1, e))
+        self.bind("<Control-a>", self._select_all)
+        self.bind("<FocusIn>", lambda e: self._set_focus(True))
+        self.bind("<FocusOut>", lambda e: self._set_focus(False))
+
+    # -- Listbox 兼容 --
+    def _index(self, i):
+        return len(self.items) - 1 if i == "end" else int(i)
+
+    def _span(self, first, last):
+        a = self._index(first)
+        b = a if last is None else self._index(last)
+        return range(max(0, a), min(len(self.items) - 1, b) + 1)
+
+    def insert(self, index, text, title=None, meta=None, aside=None):
+        item = {"text": text, "title": title or text, "meta": meta or "", "aside": aside or ""}
+        pos = len(self.items) if index == "end" else int(index)
+        self.items.insert(pos, item)
+        self._paint()
+
+    def delete(self, first, last=None):
+        idx = list(self._span(first, last))
+        if not idx:
+            return
+        del self.items[idx[0]:idx[-1] + 1]
+        self.sel = {i for i in self.sel if i < len(self.items)}
+        self._paint()
+
+    def get(self, i):
+        return self.items[self._index(i)]["text"]
+
+    def size(self):
+        return len(self.items)
+
+    def curselection(self):
+        return tuple(sorted(self.sel))
+
+    def selection_set(self, first, last=None):
+        self.sel.update(self._span(first, last))
+        self._paint()
+
+    def selection_clear(self, first, last=None):
+        self.sel.difference_update(self._span(first, last))
+        self._paint()
+
+    # -- 绘制 --
+    def _paint(self):
+        self.delete_items()
+        w = self.winfo_width()
+        if w <= 1:
+            return
+        n = len(self.items)
+        self.configure(scrollregion=(0, 0, w, max(n * self.ROW_H, 1)))
+        title_font, meta_font = self.font, F_MINI
+        for i, item in enumerate(self.items):
+            y = i * self.ROW_H
+            on = i in self.sel
+            if on or i == self._hover:
+                fill = C.A50 if on else C.N100
+                round_rect(self, 0.5, y + 2, w - 0.5, y + self.ROW_H - 2, 10,
+                           fill=fill, outline=fill)
+            elif i and (i - 1) not in self.sel and (i - 1) != self._hover:
+                self.create_line(14, y, w - 14, y, fill=C.LINE)
+            aside_w = 0
+            if item["aside"]:
+                aside_w = tkfont.Font(font=F_TIME).measure(item["aside"]) + 16
+                self.create_text(w - 14, y + self.ROW_H / 2, text=item["aside"],
+                                 anchor="e", fill=C.T3, font=F_TIME)
+            room = max(40, w - 28 - aside_w)
+            self.create_text(14, y + 18, anchor="w", font=title_font,
+                             text=fit_text(item["title"], title_font, room),
+                             fill=C.A600 if on else C.TEXT)
+            self.create_text(14, y + 38, anchor="w", font=meta_font,
+                             text=fit_text(item["meta"], meta_font, room), fill=C.SUB)
+        if self._focused and self._anchor is not None and self._anchor < n:
+            y = self._anchor * self.ROW_H
+            round_rect(self, 1, y + 3, w - 1, y + self.ROW_H - 3, 9,
+                       outline=C.FOCUS_INNER, width=1)
+
+    def delete_items(self):
+        tk.Canvas.delete(self, "all")
+
+    # -- 交互 --
+    def _row_at(self, y):
+        i = int(self.canvasy(y) // self.ROW_H)
+        return i if 0 <= i < len(self.items) else -1
+
+    def _notify(self):
+        self._paint()
+        self.event_generate("<<ListboxSelect>>")
+
+    def _click(self, e):
+        self.focus_set()
+        i = self._row_at(e.y)
+        if i < 0:
+            return
+        if e.state & 0x0001 and self._anchor is not None:          # Shift：连选
+            lo, hi = sorted((self._anchor, i))
+            self.sel = set(range(lo, hi + 1))
+        elif e.state & 0x0004:                                      # Ctrl：增减
+            self.sel ^= {i}
+            self._anchor = i
+        else:
+            self.sel = {i}
+            self._anchor = i
+        self._notify()
+
+    def _step(self, d, e):
+        if not self.items:
+            return "break"
+        cur = self._anchor if self._anchor is not None else (-1 if d > 0 else len(self.items))
+        i = max(0, min(len(self.items) - 1, cur + d))
+        self._anchor = i
+        self.sel = {i}
+        self._reveal(i)
+        self._notify()
+        return "break"
+
+    def _reveal(self, i):
+        top, bottom = self.yview()
+        n = max(1, len(self.items))
+        if i / n < top:
+            self.yview_moveto(i / n)
+        elif (i + 1) / n > bottom:
+            self.yview_moveto(max(0.0, (i + 1) / n - (bottom - top)))
+
+    def _select_all(self, _=None):
+        self.sel = set(range(len(self.items)))
+        self._notify()
+        return "break"
+
+    def _set_hover(self, i):
+        if i != self._hover:
+            self._hover = i
+            self._paint()
+
+    def _motion(self, e):
+        self._set_hover(self._row_at(e.y))
+
+    def _set_focus(self, on):
+        self._focused = on
+        self._paint()
+
+
+# ------------------------------------------------------------------ 输入对话框
+def ask_string(parent, title, prompt="", initial=""):
+    """主题化的单行输入框（模态）。确定返回文本，取消/关闭返回 None。"""
+    root = parent.winfo_toplevel()
+    win = tk.Toplevel(root)
+    win.withdraw()
+    win.title(title)
+    win.transient(root)
+    win.resizable(False, False)
+    win.configure(bg=C.N50)
+    result = {"value": None}
+    body = tk.Frame(win, bg=C.N50)
+    body.pack(fill="both", expand=True, padx=20, pady=(18, 16))
+    if prompt:
+        tk.Label(body, text=prompt, bg=C.N50, fg=C.SUB, font=F_SMALL,
+                 anchor="w").pack(fill="x", pady=(0, 8))
+    field = Field(body, width=320, value=initial, bg=C.N50)
+    field.pack(fill="x")
+    row = tk.Frame(body, bg=C.N50)
+    row.pack(fill="x", pady=(16, 0))
+
+    def ok(_=None):
+        result["value"] = field.get()
+        win.destroy()
+
+    def cancel(_=None):
+        win.destroy()
+
+    Pill(row, "确定", ok, kind="primary", bg=C.N50).pack(side="right")
+    Pill(row, "取消", cancel, kind="secondary", bg=C.N50).pack(side="right", padx=(0, 8))
+    win.bind("<Return>", ok)
+    win.bind("<Escape>", cancel)
+    win.protocol("WM_DELETE_WINDOW", cancel)
+    win.update_idletasks()
+    x = root.winfo_rootx() + (root.winfo_width() - win.winfo_reqwidth()) // 2
+    y = root.winfo_rooty() + (root.winfo_height() - win.winfo_reqheight()) // 3
+    win.geometry(f"+{max(0, x)}+{max(0, y)}")
+    win.deiconify()
+    field.entry.focus_set()
+    field.entry.select_range(0, "end")
+    try:
+        win.grab_set()
+    except tk.TclError:
+        pass
+    root.wait_window(win)
+    return result["value"]
 
 
 # ------------------------------------------------------------------ 复选框

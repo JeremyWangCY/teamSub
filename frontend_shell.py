@@ -55,7 +55,7 @@ def build_nav(self, parent):
     head.pack(fill="x", padx=18, pady=(22, 22))
     self._brand_img = ImageTk.PhotoImage(brand.render(UK.px(28)), master=nav)
     tk.Label(head, image=self._brand_img, bg=UK.C.N100).pack(side="left")
-    tk.Label(head, text="TeamsSub", font=UK.F_HEAD, bg=UK.C.N100,
+    tk.Label(head, text="TeamSub", font=UK.F_HEAD, bg=UK.C.N100,
              fg=UK.C.TEXT).pack(side="left", padx=(10, 0))
     self.nav_buttons = {}
     font = (UK.FAMILY, 11)
@@ -84,7 +84,7 @@ def build_nav(self, parent):
 def build(self):
     root = self.root
     m = MD.get(self.mode) or MD.get(MD.DEFAULT_MODE)
-    root.title(f"TeamsSub · {m['short']} 实时字幕")
+    root.title(f"TeamSub · {m['short']} 实时字幕")
     if not getattr(self, "_built_once", False):
         fit_initial_window(root)
     self._built_once = True

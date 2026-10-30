@@ -9,7 +9,7 @@ import urllib.request
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 temporary=tempfile.TemporaryDirectory(prefix='teamsub-update-tests-')
-os.environ['TEAMSSUB_DATA_DIR']=temporary.name
+os.environ['TEAMSUB_DATA_DIR']=temporary.name
 import translator as T
 import teamsub as A
 T.Config(enabled=False).save()

@@ -1,5 +1,5 @@
 @echo off
-rem Run TeamsSub with console output (for troubleshooting)
+rem Run TeamSub with console output (for troubleshooting)
 cd /d "%~dp0"
 ".venv\Scripts\python.exe" "teamsub.py"
 echo.

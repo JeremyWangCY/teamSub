@@ -1,7 +1,7 @@
 import copy
 import threading
 import tkinter as tk
-from tkinter import messagebox, simpledialog
+from tkinter import messagebox
 import ui_kit as UK
 from translator import (all_topics, TOPICS, TranslationService,
                         REASONING_LABELS, REASONING_TITLES)
@@ -140,7 +140,7 @@ def open_settings(self, page="服务"):
             if len(profiles) >= 8:
                 messagebox.showinfo('新建引擎配置', '最多保存 8 个配置，请先删除不需要的配置。', parent=self.root)
                 return
-            name = simpledialog.askstring('新建引擎配置', '输入配置名称：', parent=self.root)
+            name = UK.ask_string(self.root, '新建引擎配置')
             if name is None:
                 return
             name = name.strip()
@@ -164,8 +164,7 @@ def open_settings(self, page="服务"):
 
         def rename_profile():
             old = active_profile['name']
-            name = simpledialog.askstring('重命名引擎配置', '输入新名称：',
-                                          initialvalue=old, parent=self.root)
+            name = UK.ask_string(self.root, '重命名引擎配置', initial=old)
             if name is None:
                 return
             name = name.strip()
@@ -273,7 +272,7 @@ def open_settings(self, page="服务"):
         import update_workflow as UW
         from teamsub import APP_VERSION
         update_page=pages[page_titles.index('更新')]
-        tk.Label(update_page,text=f'TeamsSub {APP_VERSION}',bg=W,fg=UK.C.TEXT,
+        tk.Label(update_page,text=f'TeamSub {APP_VERSION}',bg=W,fg=UK.C.TEXT,
                  font=UK.F_HEAD).pack(anchor='w',pady=(0,20))
         state_update=UW.state_for(self)
         update_status=lab(update_page,'尚未检查')

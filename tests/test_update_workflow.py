@@ -18,8 +18,8 @@ from test_update_settings import GuiTestCase
 class UpdateWorkflowTests(GuiTestCase):
     def release(self):
         return U.Release('9.0.0', U.RELEASES_URL+'/tag/v9.0.0',
-            U.InstallerAsset('TeamsSub-Setup-9.0.0.exe',
-                U.RELEASES_URL+'/download/v9.0.0/TeamsSub-Setup-9.0.0.exe',100,'a'*64))
+            U.InstallerAsset('TeamSub-Setup-9.0.0.exe',
+                U.RELEASES_URL+'/download/v9.0.0/TeamSub-Setup-9.0.0.exe',100,'a'*64))
 
     def ready(self):
         state=W.state_for(self.app)

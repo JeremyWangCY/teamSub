@@ -60,21 +60,21 @@ class MeetingDetailsTests(GuiTestCase):
     def test_history_list_and_detail_rename(self):
         with patch.object(support.A,'CAPTION_DIR',Path(self.temporary.name)):
             self.app.open_history()
-            self.wait_for(lambda:any(isinstance(w,tk.Listbox) and w.size()==1 for w in self.walk(self.app.sheet_layer)))
-            listing=next(w for w in self.walk(self.app.sheet_layer) if isinstance(w,tk.Listbox))
+            self.wait_for(lambda:any(isinstance(w,UK.RowList) and w.size()==1 for w in self.walk(self.app.sheet_layer)))
+            listing=next(w for w in self.walk(self.app.sheet_layer) if isinstance(w,UK.RowList))
             self.button('重命名').command()
             self.assertTrue(any('请选择一场会议' in s for s in self.texts()))
             listing.selection_set(0)
-            with patch.object(V.simpledialog,'askstring',return_value='列表新名称'):
+            with patch.object(V.UK,'ask_string',return_value='列表新名称'):
                 self.button('重命名').command()
                 self.wait_for(lambda:'列表新名称' in listing.get(0))
             self.button('打开记录').command()
             self.wait_for(lambda:self.app._sheet_title=='会议记录')
-            with patch.object(V.simpledialog,'askstring',return_value='详情新名称'):
+            with patch.object(V.UK,'ask_string',return_value='详情新名称'):
                 self.button('重命名').command()
                 self.wait_for(lambda:'详情新名称' in self.texts())
             self.app._close_sheet()
-            self.wait_for(lambda:any(isinstance(w,tk.Listbox) and w.size() and '详情新名称' in w.get(0)
+            self.wait_for(lambda:any(isinstance(w,UK.RowList) and w.size() and '详情新名称' in w.get(0)
                                      for w in self.walk(self.app.sheet_layer)))
 
     def test_open_history_folder_uses_actual_directory_without_selection(self):

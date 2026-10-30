@@ -4,12 +4,12 @@ param(
 )
 
 # Windows integration tests use an isolated application identity and a tiny .NET
-# payload. They never launch, terminate or modify the user's TeamsSub process.
+# payload. They never launch, terminate or modify the user's TeamSub process.
 $ErrorActionPreference = 'Stop'
 $sourceRoot = Split-Path $PSScriptRoot -Parent
 $runId = [Guid]::NewGuid().ToString('N')
 $sandbox = Join-Path ([IO.Path]::GetFullPath($OutputRoot)) ('installer-update-' + $runId)
-$mutexName = 'Local\TeamsSub_Update_Test_' + $runId
+$mutexName = 'Local\TeamSub_Update_Test_' + $runId
 $appId = [Guid]::NewGuid().ToString().ToUpperInvariant()
 $utf8 = New-Object Text.UTF8Encoding($true)
 New-Item -ItemType Directory -Path $sandbox -Force | Out-Null
@@ -50,8 +50,8 @@ function New-Case([string]$Name) {
     $app = Join-Path $folder 'app Chinese 空格'
     $download = Join-Path $folder 'download'
     New-Item -ItemType Directory -Path (Join-Path $app 'captions'), $download -Force | Out-Null
-    $exe = Join-Path $app 'TeamsSub.exe'
-    $backup = Join-Path $download 'TeamsSub.previous.exe'
+    $exe = Join-Path $app 'TeamSub.exe'
+    $backup = Join-Path $download 'TeamSub.previous.exe'
     Copy-Item -LiteralPath $oldPayload -Destination $exe
     Copy-Item -LiteralPath $oldPayload -Destination $backup
     $config = Join-Path $app 'appconfig.json'
@@ -65,10 +65,10 @@ function Assert-Data($Case) {
     Assert-True ((File-Hash $Case.Meeting) -eq $Case.MeetingHash) 'Meeting fixture changed'
 }
 function Start-Update($Case, $Hold, [int]$ParentId = 0, [string]$Setup = $normalSetup, [string]$BackupHash = $Case.Hash) {
-    $arguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/NOICONS', '/TeamsSubUpdate=1',
-        ('/TeamsSubWaitPid=' + $Hold.Process.Id), ('/TeamsSubWaitParentPid=' + $ParentId),
-        ('/DIR="' + $Case.App + '"'), ('/TeamsSubBackup="' + $Case.Backup + '"'),
-        ('/TeamsSubBackupSHA256=' + $BackupHash), ('/LOG="' + (Join-Path $Case.Folder 'install.log') + '"'))
+    $arguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-', '/NOICONS', '/TeamSubUpdate=1',
+        ('/TeamSubWaitPid=' + $Hold.Process.Id), ('/TeamSubWaitParentPid=' + $ParentId),
+        ('/DIR="' + $Case.App + '"'), ('/TeamSubBackup="' + $Case.Backup + '"'),
+        ('/TeamSubBackupSHA256=' + $BackupHash), ('/LOG="' + (Join-Path $Case.Folder 'install.log') + '"'))
     return Start-Process -FilePath $Setup -ArgumentList $arguments -WindowStyle Hidden -PassThru
 }
 function Record([string]$Name) { $results.Add(@{ Name = $Name; Passed = $true }) }
@@ -107,16 +107,16 @@ $newPayload = Join-Path $sandbox 'new.exe'
 Assert-True ($LASTEXITCODE -eq 0) 'Old probe compilation failed'
 & $compiler /nologo /target:winexe ("/out:$newPayload") $probeFile
 Assert-True ($LASTEXITCODE -eq 0) 'New probe compilation failed'
-$source = [IO.File]::ReadAllText((Join-Path $sourceRoot 'installer\TeamsSub.iss'))
+$source = [IO.File]::ReadAllText((Join-Path $sourceRoot 'installer\TeamSub.iss'))
 $source = $source.Replace('858D2E37-43CC-4A09-89A4-6C925937A582', $appId)
-$source = $source.Replace('TeamsSub_SingleInstance', ('TeamsSub_Update_Test_' + $runId))
-$source = $source.Replace('AppName=TeamsSub', 'AppName=TeamsSub Isolated Update Test')
-$source = $source.Replace('DefaultGroupName=TeamsSub', ('DefaultGroupName=TeamsSub Isolated ' + $runId))
+$source = $source.Replace('TeamSub_SingleInstance', ('TeamSub_Update_Test_' + $runId))
+$source = $source.Replace('AppName=TeamSub', 'AppName=TeamSub Isolated Update Test')
+$source = $source.Replace('DefaultGroupName=TeamSub', ('DefaultGroupName=TeamSub Isolated ' + $runId))
 $source = $source.Replace('UsePreviousAppDir=yes', 'UsePreviousAppDir=no')
 $source = [Text.RegularExpressions.Regex]::Replace($source, '(?ms)^\[Icons\].*?(?=^\[Run\])', "[Icons]`r`n`r`n")
 $source = $source.Replace('..\teamsub.ico', (Join-Path $sourceRoot 'teamsub.ico'))
 $source = $source.Replace('..\LICENSE', (Join-Path $sourceRoot 'LICENSE'))
-$source = $source.Replace('OutputBaseFilename=TeamsSub-Setup-{#AppVersion}', 'OutputBaseFilename=Isolated-Update')
+$source = $source.Replace('OutputBaseFilename=TeamSub-Setup-{#AppVersion}', 'OutputBaseFilename=Isolated-Update')
 $normalSource = Join-Path $sandbox 'Normal.iss'
 [IO.File]::WriteAllText($normalSource, $source, $utf8)
 & $IsccPath ("/DBinaryPath=$newPayload") '/DUpdateWaitTimeout=4000' ("/O$sandbox") $normalSource *> (Join-Path $sandbox 'compile.log')

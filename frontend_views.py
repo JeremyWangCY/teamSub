@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 import time
 import tkinter as tk
-from tkinter import filedialog, messagebox, simpledialog
+from tkinter import filedialog, messagebox
 from dataclasses import replace
 import ui_kit as UK
 import meeting_export as ME
@@ -166,8 +166,7 @@ def rename_meeting(app, session, saved):
     if not MR.editable(session.path):
         app._notice('旧版 Markdown 请先续接并另存为新版会议，再重命名。')
         return
-    title = simpledialog.askstring('重命名会议', '会议名称：',
-                                   initialvalue=session.title, parent=app.root)
+    title = UK.ask_string(app.root, '重命名会议', initial=session.title)
     if title is None:
         return
     try:
@@ -196,24 +195,22 @@ def open_history(app):
     def build(parent):
         b = card(parent)
 
-        status = label(b, '正在读取本地记录…', small=True)
+        # 搜索 · 重命名 在左，计数/结果提示靠右，同一行
         search_row = tk.Frame(b, bg=UK.C.N0)
-        search_row.pack(anchor='w', pady=8)
-        search = UK.SearchBox(search_row, width=400, placeholder='搜索标题、日期或文件名', bg=UK.C.N0)
+        search_row.pack(fill='x', pady=(0, 12))
+        search = UK.SearchBox(search_row, width=360, placeholder='搜索标题、日期或文件名', bg=UK.C.N0)
         search.pack(side='left')
+        status = tk.Label(search_row, text='正在读取本地记录…', bg=UK.C.N0, fg=UK.C.SUB,
+                          font=UK.F_SMALL, anchor='e', justify='right', wraplength=300)
+        status.pack(side='right')
         if state['query']:
             search._ph = False
             search.entry.configure(fg=UK.C.TEXT)
             search.var.set(state['query'])
         frame = tk.Frame(b, bg=UK.C.N0)
         frame.pack(fill='both',expand=True)
-        # 扁平列表：与卡片同底色，细线分隔，主题色选中，配细滚动条。
-        listing = tk.Listbox(frame, height=3, selectmode='extended', exportselection=False,
-                             bg=UK.C.N0, fg=UK.C.TEXT, font=(UK.FAMILY, 11), bd=0,
-                             highlightthickness=1, highlightbackground=UK.C.LINE,
-                             highlightcolor=UK.C.LINE_D, relief='flat',
-                             selectbackground=UK.C.A100, selectforeground=UK.C.TEXT,
-                             selectborderwidth=4, activestyle='none')
+        # 两行式列表：标题一行，时间/条数/时长一行，文件尾号靠右；可多选。
+        listing = UK.RowList(frame, bg=UK.C.N0)
         sb = UK.ThinScroll(frame, listing, bg=UK.C.N0)
         sb.pack(side='right', fill='y', padx=(6, 0))
         listing.pack(side='left', fill='both', expand=True)
@@ -261,16 +258,19 @@ def open_history(app):
             state['selected'].intersection_update(str(s.path) for s in state['visible'])
             listing.delete(0,'end')
             for i, s in enumerate(state['visible']):
-                listing.insert('end', row_text(s))
+                meta = [s.started_label, f'{s.count} 条']
+                if s.duration_label:
+                    meta.append(s.duration_label)
+                if s.legacy:
+                    meta.append('旧版')
+                tail = s.path.stem[-12:] if s.path.suffix.lower() == '.sqlite3' else ''
+                listing.insert('end', row_text(s), title=s.title or '未命名会议',
+                               meta=' · '.join(meta), aside=tail)
                 if str(s.path) in state['selected']:
                     listing.selection_set(i)
             listing.yview_moveto(state['scroll'])
             update_status()
         search.on_change = filter_list
-        def clear_search():
-            search._show_placeholder()
-            filter_list()
-        UK.Pill(search_row, '清除搜索', clear_search, kind='ghost', bg=UK.C.N0).pack(side='left', padx=8)
         def on_selection(_event):
             # 用户一动选择，上一次的删除结果就不再是当前语境，撤掉。
             # （程序里 selection_set 不会触发 <<ListboxSelect>>，所以刷新列表
@@ -309,8 +309,8 @@ def open_history(app):
                 state['all'] = [session if s.path == session.path else s for s in state['all']]
                 filter_list()
             rename_meeting(app, sessions[0], renamed)
-        UK.Pill(search_row, '重命名', rename_selected, kind='secondary', bg=UK.C.N0,
-                icon='edit', tooltip='重命名所选会议（F2）').pack(side='left', padx=8)
+        UK.Pill(search_row, '重命名', rename_selected, kind='ghost', bg=UK.C.N0,
+                icon='edit', tooltip='F2').pack(side='left', padx=8)
         listing.bind('<F2>', lambda e: rename_selected())
         def read(action):
             sessions = selected()

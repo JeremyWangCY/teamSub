@@ -1183,15 +1183,13 @@ class App:
         for w in layer.winfo_children():
             w.destroy()
 
-        # 导航里的目的地是顶层页面，只显示标题；其余（确认、导出、记录详情…）
-        # 是从某处推进来的，带「返回」。
+        # 导航里的目的地（历史/设置/帮助）由导航高亮表明位置，不另起标题；
+        # 从别处推进来的页面（确认、导出、记录详情…）只带「返回」。
         top = tk.Frame(layer, bg=UK.C.N50)
-        top.pack(fill="x", padx=24, pady=(20, 16))
+        top.pack(fill="x", padx=24, pady=(20, 12))
         if self._sheet_stack or title not in self.NAV_PAGES:
             UK.Pill(top, "返回", self._close_sheet, kind="ghost", padx=10, icon="back",
-                    tooltip="返回（Esc）").pack(side="left", padx=(0, 10))
-        tk.Label(top, text=title, bg=UK.C.N50, fg=UK.C.TEXT,
-                 font=UK.F_TITLE).pack(side="left")
+                    tooltip="Esc").pack(side="left")
 
         self._sheet_footer = tk.Frame(layer, bg=UK.C.N50)
         wrap = tk.Frame(layer, bg=UK.C.N50)
@@ -1543,8 +1541,8 @@ class App:
         m.add_separator()
         m.add_command(label="退出 TeamsSub", command=self.on_close)
         try:
-            m.tk_popup(self.btn_more.winfo_rootx() - 120,
-                       self.btn_more.winfo_rooty() + self.btn_more.winfo_height() + 6)
+            m.tk_popup(self.btn_more.winfo_rootx() - UK.px(120),
+                       self.btn_more.winfo_rooty() + UK.px(self.btn_more.winfo_height() + 6))
         finally:
             m.grab_release()
 
@@ -2272,8 +2270,8 @@ class App:
             self.root.after_cancel(previous)
         label = self.lbl_feedback
         message = ('✓  ' if msg.startswith('已复制') else '') + msg
-        available = label.master.winfo_width()
-        width = max(200, (available if available > 1 else self.root.winfo_width() - 208) - 12)
+        available = UK.lpx(label.master.winfo_width())
+        width = max(200, (available if available > 1 else UK.lpx(self.root.winfo_width()) - 208) - 12)
         label.configure(text=UK.fit_text(message, UK.F_MINI, width), fg=UK.C.A600)
         label.place(x=0, y=0, relheight=1)
         label.tk.call('raise', label._w)
@@ -2516,7 +2514,7 @@ class App:
             head = tk.Label(b, bg=UK.C.N0, fg=UK.C.SUB, font=UK.F_MINI,
                             anchor='w', justify='left')
             head.pack(fill='x')
-            head.configure(text=f"{APP_DISPLAY_NAME} v{APP_VERSION} · {data_dir()}",
+            head.configure(text=f"数据目录  {data_dir()}",
                            wraplength=680)
             tabs = tk.Frame(b, bg=UK.C.N0)
             tabs.pack(anchor='w', pady=(10, 12))
@@ -2554,7 +2552,7 @@ class App:
                 btn = UK.Pill(tabs, key, lambda key=key: select(key), kind='tab', bg=UK.C.N0)
                 btn.pack(side='left', padx=(0, 8))
                 buttons.append((key, btn))
-            b.bind('<Configure>', lambda e: head.configure(wraplength=max(200, e.width - 10)))
+            b.bind('<Configure>', lambda e: head.configure(wraplength=max(200, UK.lpx(e.width) - 10)))
             select('采集')
         self._show_sheet('帮助', build)
 
@@ -3406,6 +3404,36 @@ def _acquire_single_instance() -> bool:
         return True        # 单实例机制自身出错时宁可照常启动，不挡用户
 
 
+def _enable_dpi_awareness():
+    """声明系统级 DPI 感知：否则 Windows 把 100% 的位图整体拉伸，高缩放屏上发虚。
+
+    必须在创建任何窗口之前调用。按系统 DPI 一次定标（不做每显示器动态
+    缩放），跨屏拖动时由系统处理。
+    """
+    try:
+        import ctypes
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(1)
+        except (AttributeError, OSError):
+            ctypes.windll.user32.SetProcessDPIAware()
+    except (AttributeError, OSError):
+        pass
+
+
+def init_ui_scale(root):
+    """按屏幕 DPI 定界面缩放系数；TEAMSSUB_UI_SCALE 可强制指定（调试/截图）。"""
+    forced = os.environ.get("TEAMSSUB_UI_SCALE", "").strip()
+    try:
+        if forced:
+            scale = float(forced)
+            root.tk.call("tk", "scaling", scale * 96 / 72)   # 字体跟着同一系数
+        else:
+            scale = root.winfo_fpixels("1i") / 96
+    except (ValueError, tk.TclError):
+        return
+    UK.install_scale(scale)
+
+
 def main():
     # 隔离诊断必须先于单实例、配置读取和正常启动目录写入。
     if len(sys.argv) == 3 and sys.argv[1] == '--self-test':
@@ -3424,7 +3452,9 @@ def main():
             pass
         return
     _write_instance_file()
+    _enable_dpi_awareness()
     root = tk.Tk()
+    init_ui_scale(root)
     install_crash_log(root)
     try:
         root.iconbitmap(default=str(RESOURCE_DIR / "teamsub.ico"))

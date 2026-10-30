@@ -249,6 +249,8 @@ def render(name: str, size: int, color: str, stroke: float = STROKE) -> Image.Im
 
 def photo(name: str, size: int, color: str, master):
     """PhotoImage 按 Tk 根窗口缓存：图片属于创建它的解释器，换根窗口必须重建。"""
+    import ui_kit
+    size = max(1, ui_kit.px(size))          # 逻辑尺寸 → 物理像素
     root = master._root()
     cache = root.__dict__.setdefault("_icon_cache", {})
     key = (name, size, color.lower())

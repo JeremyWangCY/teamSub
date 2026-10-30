@@ -59,9 +59,7 @@ def open_export(app, records=None, title=None, initial_format=None):
         stamp = tk.BooleanVar(value=saved.get('timestamps', True) if isinstance(saved.get('timestamps', True), bool) else True)
         synthetic = tk.BooleanVar(value=saved.get('synthetic_timing', False) if isinstance(saved.get('synthetic_timing', False), bool) else False)
         def check(text, var):
-            tk.Checkbutton(choices, text=text, variable=var, bg=UK.C.N0, fg=UK.C.SUB,
-                           selectcolor=UK.C.N0, activebackground=UK.C.N0, activeforeground=UK.C.TEXT,
-                           font=UK.F_SMALL).pack(side='left', padx=(0, 12))
+            UK.Check(choices, text, var, bg=UK.C.N0).pack(side='left', padx=(0, 16))
         check('包含姓名', name)
         check('正文时间', stamp)
         check('SRT 阅读时间轴（每条 3 秒）', synthetic)
@@ -227,11 +225,11 @@ def open_history(app):
             if not state['all'] and state['errors']:
                 text = '无法读取会议记录，请检查文件后刷新。'
             elif not state['all']:
-                text = '暂无会议记录。开始会议后，记录会自动保存。'
+                text = '暂无会议记录'
             elif not count:
                 text = '没有找到匹配的会议，请修改或清空搜索条件。'
             else:
-                text = f'{count} 场' + (f' · 已选择 {selected_count} 场' if selected_count else ' · Ctrl 多选')
+                text = f'{count} 场' + (f' · 已选择 {selected_count} 场' if selected_count else '')
             if state['errors']:
                 text += f' · {len(state["errors"])} 个文件无法读取，可尝试刷新'
             # 删除结果必须活过一次刷新：删完总要重读列表，先写 status 再刷新
@@ -496,8 +494,8 @@ def view_history(app, session, records):
         meta.pack(anchor='w', pady=(4, 0))
 
         def wrap_title(event):
-            title_label.configure(wraplength=max(80,event.width))
-            meta.configure(wraplength=max(80,event.width))
+            title_label.configure(wraplength=max(80,UK.lpx(event.width)))
+            meta.configure(wraplength=max(80,UK.lpx(event.width)))
         title_box.bind('<Configure>',wrap_title)
 
         # ---------------- 检索 + 显示模式 ----------------
@@ -569,6 +567,11 @@ def view_history(app, session, records):
             readout.configure(
                 text=f'{len(chosen)} 条 · 第 {state["page"] + 1}/{total} 页'
                      + (f' · 已改 {state["dirty"]} 条' if state['dirty'] else ''))
+            # 只有一页时翻页按钮没有意义，整行隐藏
+            if total > 1 and not pager.winfo_manager():
+                pager.pack(side='left')
+            elif total <= 1 and pager.winfo_manager():
+                pager.pack_forget()
             meta.configure(text=f'{len(state["records"])} 条 · {session.started.replace("T", " ")}'
                                + (' · 旧版 Markdown（只读）' if session.legacy else ''))
 
@@ -612,13 +615,13 @@ def view_history(app, session, records):
                         side='right', padx=(0, 10))
             UK.Pill(actions, '取消补译' if MT.active_job(app, session.path) else '补译',
                     backfill, kind='tint').pack(side='right', padx=(0, 10))
+            UK.Pill(actions, '重命名', lambda: rename_meeting(app, session, renamed),
+                    kind='ghost', bg=UK.C.N0, icon='edit').pack(side='right', padx=(0, 6))
         def renamed(value):
             nonlocal session
             session = value
             if title_label.winfo_exists():
                 title_label.configure(text=session.title)
-        UK.Pill(title_box, '重命名', lambda: rename_meeting(app, session, renamed),
-                kind='ghost', bg=UK.C.N0, height=28).pack(anchor='w', pady=(2,0))
 
         def backfill():
             job = MT.active_job(app, session.path)
@@ -686,18 +689,17 @@ def view_history(app, session, records):
         progress.pack(fill='x', pady=(0, 6))
         row = tk.Frame(app._sheet_footer, bg=UK.C.N50)
         row.pack(fill='x')
-        UK.Pill(row, '上一页', lambda: turn(-1), kind='ghost').pack(side='left')
-        UK.Pill(row, '下一页', lambda: turn(1), kind='ghost').pack(side='left', padx=12)
+        pager = tk.Frame(row, bg=UK.C.N50)
+        prev_btn = UK.Pill(pager, '上一页', lambda: turn(-1), kind='ghost')
+        prev_btn.pack(side='left')
+        next_btn = UK.Pill(pager, '下一页', lambda: turn(1), kind='ghost')
+        next_btn.pack(side='left', padx=12)
         failure_button = UK.Pill(row, '查看失败项', lambda: toggle_failures(), kind='ghost')
         def toggle_failures():
             state['failed_only'] = not state['failed_only']
             state['page'] = 0
             failure_button.set_text('显示全部' if state['failed_only'] else '查看失败项')
             paint(reset_scroll=True)
-        # 真正的「返回上一层」，不是再开一个历史列表（旧实现会叠层，
-        # 还把主窗口一起带走了）
-        UK.Pill(row, '返回历史列表', app._close_sheet,
-                kind='tint').pack(side='right')
 
         rebuild_actions()
         readonly(True)

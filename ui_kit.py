@@ -133,6 +133,216 @@ F_NAME  = (FAMILY, 10, "bold")
 F_BODY  = (FAMILY, 12)
 F_TIME  = ("Consolas", 9)
 
+# ------------------------------------------------------------------ DPI 缩放
+# 界面代码一律写「逻辑像素」（100% 缩放下的像素）。进程声明 DPI 感知后，
+# Tk 拿到的是物理像素：字体按磅值自动放大，其余写死的像素不会。这里在
+# Tk 这一层统一换算一次，业务代码不用到处乘系数：
+#   · pack/grid/place 的边距与位置、Frame/Toplevel 宽高、wraplength、
+#     Text 的行距与缩进 —— 传入时乘 S；
+#   · Canvas 整体工作在逻辑坐标：画图、coords、事件坐标、winfo 尺寸都换算；
+#   · 字体的 measure/metrics 返回逻辑像素，和上面两类数值同一把尺子；
+#   · PIL 位图（圆角、图标）按物理尺寸渲染，保证清晰。
+# S == 1 时什么都不装，行为与旧版完全一致。
+S = 1.0
+
+
+def px(v):
+    """逻辑像素 → 物理像素（整数），用于窗口几何等只认整数的场合。"""
+    return int(round(v * S))
+
+
+def lpx(v):
+    """物理像素（winfo_* 读出来的）→ 逻辑像素。"""
+    return v / S
+
+
+def _sc(v):
+    """把一个像素量乘 S；元组（如 padx=(0, 8)）逐项处理，非数字原样返回。"""
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return v * S
+    if isinstance(v, (tuple, list)):
+        return type(v)(_sc(i) for i in v)
+    if isinstance(v, str):
+        parts = v.split()
+        try:
+            return " ".join(str(float(p) * S) for p in parts)
+        except ValueError:
+            return v
+    return v
+
+
+_GEOM_KEYS = {"padx", "pady", "ipadx", "ipady"}
+_PLACE_KEYS = {"x", "y", "width", "height"}
+_SIZE_WIDGETS = {"frame", "toplevel", "labelframe", "canvas"}
+_WIDGET_KEYS = {"wraplength", "padx", "pady", "spacing1", "spacing2", "spacing3"}
+_CANVAS_KEYS = {"scrollregion", "xscrollincrement", "yscrollincrement"}
+_TAG_KEYS = {"spacing1", "spacing2", "spacing3", "lmargin1", "lmargin2", "rmargin", "offset"}
+_ITEM_KEYS = {"width", "height", "activewidth", "disabledwidth"}
+
+
+def _scaled(opts, keys):
+    if not opts:
+        return opts
+    return {k: (_sc(v) if k.rstrip("_") in keys else v) for k, v in opts.items()}
+
+
+def _widget_keys(widget):
+    keys = set(_WIDGET_KEYS)
+    name = getattr(widget, "widgetName", "")
+    if name in _SIZE_WIDGETS:
+        keys |= {"width", "height"}
+    if name == "canvas":
+        keys |= _CANVAS_KEYS
+    return keys
+
+
+def install_scale(scale: float):
+    """按缩放系数挂上换算层；只能在建任何控件之前调用一次。"""
+    global S
+    scale = round(float(scale), 3)
+    if scale <= 0 or abs(scale - 1.0) < 0.01 or S != 1.0:
+        return
+    S = scale
+    Misc, Canvas = tk.Misc, tk.Canvas
+
+    def wrap_geom(orig, keys):
+        def f(self, cnf={}, **kw):
+            if isinstance(cnf, dict) and cnf:
+                kw = {**cnf, **kw}
+                cnf = {}
+            return orig(self, cnf, **_scaled(kw, keys))
+        return f
+
+    for cls, names, keys in ((tk.Pack, ("pack", "pack_configure"), _GEOM_KEYS),
+                             (tk.Grid, ("grid", "grid_configure"), _GEOM_KEYS),
+                             (tk.Place, ("place", "place_configure"), _GEOM_KEYS | _PLACE_KEYS)):
+        orig = getattr(cls, names[1])
+        for n in names:
+            setattr(cls, n, wrap_geom(orig, keys))
+
+    orig_grid_conf = Misc._grid_configure
+
+    def grid_conf(self, command, index, cnf, kw):
+        if isinstance(cnf, dict):
+            cnf = _scaled(cnf, {"minsize", "pad"})
+        return orig_grid_conf(self, command, index, cnf, _scaled(kw, {"minsize", "pad"}))
+    Misc._grid_configure = grid_conf
+
+    orig_init = tk.BaseWidget.__init__
+
+    def base_init(self, master, widgetName, cnf={}, kw={}, extra=()):
+        self.widgetName = widgetName
+        keys = _widget_keys(self)
+        return orig_init(self, master, widgetName, _scaled(dict(cnf), keys),
+                         _scaled(dict(kw), keys), extra)
+    tk.BaseWidget.__init__ = base_init
+
+    orig_configure = Misc._configure
+
+    def configure(self, cmd, cnf, kw):
+        if isinstance(cnf, str) or (not cnf and not kw):
+            return orig_configure(self, cmd, cnf, kw)
+        if cmd == "configure":
+            keys = _widget_keys(self)
+        elif isinstance(cmd, tuple) and cmd[0] == "itemconfigure" and isinstance(self, Canvas):
+            keys = _ITEM_KEYS
+        elif isinstance(cmd, tuple) and cmd[:2] == ("tag", "configure"):
+            keys = _TAG_KEYS
+        else:
+            return orig_configure(self, cmd, cnf, kw)
+        cnf = _scaled(dict(cnf), keys) if isinstance(cnf, dict) else cnf
+        return orig_configure(self, cmd, cnf, _scaled(kw, keys))
+    Misc._configure = configure
+
+    orig_cget = Misc.cget
+
+    def cget(self, key):
+        value = orig_cget(self, key)
+        if isinstance(self, Canvas) and key in ("width", "height"):
+            return float(value) / S
+        return value
+    Misc.cget = Misc.__getitem__ = cget
+
+    # ---- Canvas：逻辑坐标 ----
+    def flat_scale(args):
+        return tuple(a * S if isinstance(a, (int, float)) and not isinstance(a, bool) else a
+                     for a in tk._flatten(args))
+
+    orig_create = Canvas._create
+
+    def create(self, itemType, args, kw):
+        args = tk._flatten(args)
+        cnf = {}
+        if args and isinstance(args[-1], dict):
+            args, cnf = args[:-1], args[-1]
+        return orig_create(self, itemType, flat_scale(args),
+                           _scaled({**cnf, **kw}, _ITEM_KEYS))
+    Canvas._create = create
+
+    orig_coords = Canvas.coords
+
+    def coords(self, *args):
+        if len(args) > 1:
+            args = (args[0],) + flat_scale(args[1:])
+        return [c / S for c in orig_coords(self, *args)]
+    Canvas.coords = coords
+
+    orig_move, orig_moveto = Canvas.move, Canvas.moveto
+    Canvas.move = lambda self, *a: orig_move(self, *(a[:1] + flat_scale(a[1:])))
+    Canvas.moveto = lambda self, tag, x="", y="": orig_moveto(
+        self, tag, _sc(x) if x != "" else x, _sc(y) if y != "" else y)
+
+    orig_bbox = Canvas.bbox
+
+    def bbox(self, *args):
+        box = orig_bbox(self, *args)
+        return tuple(v / S for v in box) if box else box
+    Canvas.bbox = bbox
+
+    for name in ("canvasx", "canvasy"):
+        def conv(self, screen, gridspacing=None, _orig=getattr(Canvas, name)):
+            return _orig(self, screen * S, gridspacing) / S
+        setattr(Canvas, name, conv)
+
+    for name in ("find_overlapping", "find_enclosed", "find_closest"):
+        def find(self, *a, _orig=getattr(Canvas, name)):
+            return _orig(self, *flat_scale(a))
+        setattr(Canvas, name, find)
+
+    for name in ("winfo_width", "winfo_height", "winfo_reqwidth", "winfo_reqheight"):
+        def size(self, _orig=getattr(Misc, name)):
+            return _orig(self) / S
+        setattr(Canvas, name, size)
+
+    orig_sub = Misc._substitute
+
+    def substitute(self, *args):
+        res = orig_sub(self, *args)
+        e = res[0] if isinstance(res, tuple) and res else None
+        if isinstance(e, tk.Event):
+            for attr in ("x", "y", "width", "height"):
+                v = getattr(e, attr, None)
+                if isinstance(v, int):
+                    setattr(e, attr, v / S)
+        return res
+    Canvas._substitute = substitute
+
+    # ---- 字体量尺：逻辑像素 ----
+    orig_measure, orig_metrics = tkfont.Font.measure, tkfont.Font.metrics
+
+    def measure(self, text, displayof=None):
+        return round(orig_measure(self, text, displayof) / S)
+
+    def metrics(self, *options, **kw):
+        res = orig_metrics(self, *options, **kw)
+        if isinstance(res, dict):
+            return {k: (round(v / S) if k != "fixed" else v) for k, v in res.items()}
+        return res if options and options[0] == "fixed" else round(res / S)
+    tkfont.Font.measure, tkfont.Font.metrics = measure, metrics
+
+
 # 形状标尺
 R_CARD  = 16     # 大卡（主内容、设置、确认）
 R_POP   = 12     # 弹层
@@ -227,21 +437,25 @@ def _parent_bg(w) -> str:
 
 def round_rect(cv: tk.Canvas, x1, y1, x2, y2, r, **kw):
     """Antialiased rounded geometry, with references scoped to the owning canvas."""
+    # 入参是逻辑坐标；位图按物理像素画，高缩放下边缘依旧锐利
     scale = 3
+    # 未布局的画布只有 1px（缩放后不足 1 个逻辑像素），收成零尺寸而不是倒置
+    x2, y2 = max(x1, x2), max(y1, y2)
+    x1, y1, x2, y2, r = x1 * S, y1 * S, x2 * S, y2 * S, r * S
     left, top = math.floor(x1), math.floor(y1)
     width, height = max(1, math.ceil(x2)-left+1), max(1, math.ceil(y2)-top+1)
     shape = Image.new('RGBA', (width*scale, height*scale))
     draw = ImageDraw.Draw(shape)
     box = ((x1-left)*scale, (y1-top)*scale, (x2-left)*scale, (y2-top)*scale)
     fill, outline = kw.pop('fill', None), kw.pop('outline', None)
-    line_width = max(1, round(kw.pop('width', 1)*scale))
+    line_width = max(1, round(kw.pop('width', 1)*S*scale))
     draw.rounded_rectangle(box, radius=max(0,r)*scale, fill=fill or None, outline=outline or None, width=line_width)
     photo = ImageTk.PhotoImage(shape.resize((width,height), Image.Resampling.LANCZOS), master=cv)
     refs = getattr(cv, '_round_images', {})
     for item in list(refs):
         if not cv.type(item):
             del refs[item]
-    item = cv.create_image(left, top, image=photo, anchor='nw', **kw)
+    item = cv.create_image(left / S, top / S, image=photo, anchor='nw', **kw)
     refs[item] = photo
     cv._round_images = refs
     return item
@@ -293,7 +507,7 @@ class Card(tk.Frame):
         只在"分配尺寸变化"时触发，内容增长不触发，所以必须显式算一次。
         """
         self.update_idletasks()
-        h = self.body.winfo_reqheight() + 2 * self.pad
+        h = lpx(self.body.winfo_reqheight()) + 2 * self.pad
         self.cv.configure(height=h)
 
     def _resize(self, e):
@@ -338,8 +552,10 @@ class Tooltip:
         tk.Label(win, text=text, bg=C.TEXT, fg=C.N0, font=F_MINI,
                  padx=8, pady=4, justify="left").pack()
         win.update_idletasks()
-        x = self.widget.winfo_rootx() + (self.widget.winfo_width() - win.winfo_reqwidth()) // 2
-        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+        # 屏幕定位全用物理像素（Canvas 的 winfo_width 已换成逻辑值，这里绕开）
+        ww, wh = tk.Misc.winfo_width(self.widget), tk.Misc.winfo_height(self.widget)
+        x = self.widget.winfo_rootx() + (ww - win.winfo_reqwidth()) // 2
+        y = self.widget.winfo_rooty() + wh + px(6)
         x = max(0, min(x, self.widget.winfo_screenwidth() - win.winfo_reqwidth()))
         win.geometry(f"+{x}+{y}")
 
@@ -744,6 +960,9 @@ class SpeakerList(tk.Canvas):
 
 
 def _initials(name: str) -> str:
+    # 中日韩名字取首字：两个方块字塞不进 22px 的头像圆
+    if name and "⺀" <= name[0] <= "鿿":
+        return name[0]
     parts = [p for p in name.replace("-", " ").split() if p]
     if not parts:
         return "?"
@@ -978,7 +1197,7 @@ class Field(tk.Frame):
         self._paint()
 
     def _paint(self):
-        w, h = self.winfo_width(), self.h
+        w, h = self.cv.winfo_width(), self.h
         if w <= 1:
             return
         self.cv.delete("shape")
@@ -1227,8 +1446,8 @@ class Select(tk.Canvas):
         w = max(1, self.winfo_width())
         h = self.ROW_H * len(self.options) + 8
         # 画布项里的控件 rootx 不可靠，一律用 place 的 in_ 相对锚点定位
-        oy = max(0, self.winfo_rooty() - top.winfo_rooty())
-        below = (oy + self.h + 4 + h <= top.winfo_height()) or oy == 0
+        oy = max(0, lpx(self.winfo_rooty() - top.winfo_rooty()))
+        below = (oy + self.h + 4 + h <= lpx(top.winfo_height())) or oy == 0
         pop = tk.Canvas(top, width=w, height=h, bg=self.bgcol,
                         highlightthickness=0, bd=0)
         pop.place(in_=self, x=0, y=(self.h + 4) if below else -(h + 4))
@@ -1398,8 +1617,8 @@ class ModeSwitch(tk.Canvas):
         w = max(int(self["width"]), 210)
         h = self.ROW_H * len(self.modes) + 8
         # 画布项里的控件 rootx 不可靠，一律用 place 的 in_ 相对锚点定位
-        oy = max(0, self.winfo_rooty() - top.winfo_rooty())
-        below = (oy + self.h + 4 + h <= top.winfo_height()) or oy == 0
+        oy = max(0, lpx(self.winfo_rooty() - top.winfo_rooty()))
+        below = (oy + self.h + 4 + h <= lpx(top.winfo_height())) or oy == 0
         pop = tk.Canvas(top, width=w, height=h, bg=self.bgcol,
                         highlightthickness=0, bd=0)
         pop.place(in_=self, x=0, y=(self.h + 4) if below else -(h + 4))
@@ -1468,6 +1687,63 @@ class ModeSwitch(tk.Canvas):
             self._paint()
         if notify and self.command:
             self.command(key)
+
+
+# ------------------------------------------------------------------ 复选框
+class Check(tk.Canvas):
+    """圆角复选框 + 文案，绑定 BooleanVar；原生 Checkbutton 的方框在高 DPI 下过小。"""
+
+    BOX = 16
+
+    def __init__(self, master, text, variable, command=None, bg=None, font=None):
+        self.bgcol = bg or _parent_bg(master)
+        self.text, self.var, self.command = text, variable, command
+        self.font = font or F_SMALL
+        self._hover = self._focused = False
+        self.h = 26
+        w = self.BOX + 8 + tkfont.Font(font=self.font).measure(text) + 2
+        super().__init__(master, width=w, height=self.h, bg=self.bgcol,
+                         highlightthickness=0, bd=0, cursor="hand2", takefocus=True)
+        for seq in ("<Button-1>", "<space>"):
+            self.bind(seq, self.toggle)
+        self.bind("<Enter>", lambda e: self._set("_hover", True))
+        self.bind("<Leave>", lambda e: self._set("_hover", False))
+        self.bind("<FocusIn>", lambda e: self._set("_focused", True))
+        self.bind("<FocusOut>", lambda e: self._set("_focused", False))
+        self._trace = variable.trace_add("write", lambda *a: self._paint())
+        self.bind("<Destroy>", self._untrace, add="+")
+        self._paint()
+
+    def _untrace(self, _=None):
+        try:
+            self.var.trace_remove("write", self._trace)
+        except (tk.TclError, ValueError):
+            pass
+
+    def _set(self, attr, value):
+        setattr(self, attr, value)
+        self._paint()
+
+    def _paint(self):
+        self.delete("all")
+        on = bool(self.var.get())
+        b, y = self.BOX, (self.h - self.BOX) / 2
+        if on:
+            round_rect(self, 0.5, y + 0.5, b - 0.5, y + b - 0.5, 4, fill=C.A500, outline=C.A500)
+            self.create_image(1, y + 1, anchor="nw",
+                              image=icons.photo("check", b - 2, "#FFFFFF", master=self))
+        else:
+            edge = C.SUB if (self._hover or self._focused) else C.N300
+            round_rect(self, 0.5, y + 0.5, b - 0.5, y + b - 0.5, 4, fill=C.N0, outline=edge, width=1.2)
+        self.create_text(b + 8, self.h / 2 + 0.5, text=self.text, anchor="w",
+                         fill=C.TEXT if self._hover else C.SUB, font=self.font)
+
+    def toggle(self, _=None):
+        self.focus_set()
+        self.var.set(not bool(self.var.get()))
+        if self.command:
+            self.command()
+        return "break"
 
 
 # ------------------------------------------------------------------ 开关
@@ -1584,7 +1860,7 @@ class PickList(tk.Canvas):
     def _on_resize(self, _event=None):
         """按当前高度更新可见行数（滚轮与翻页都依赖 self.rows）。"""
         try:
-            visible = max(2, (self.winfo_height() - 10) // self.ROW_H)
+            visible = max(2, int((self.winfo_height() - 10) // self.ROW_H))
             if visible != self.rows:
                 self.rows = visible
                 self._clamp()

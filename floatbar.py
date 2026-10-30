@@ -43,7 +43,8 @@ class FloatBar:
         # user_h 是「用户手动拖出来的高度」；0 表示按内容自适应
         self.user_h = max(0, int(getattr(cfg, "float_h", 0) or 0))
         self.h = max(MIN_H, self.user_h or H)
-        w.geometry(f"{self.w}x{self.h}+{w.winfo_screenwidth() - self.w - 48}+96")
+        # self.w/self.h 都是逻辑像素，只在落到窗口几何时换算
+        w.geometry(f"{UK.px(self.w)}x{UK.px(self.h)}+{w.winfo_screenwidth() - UK.px(self.w + 48)}+{UK.px(96)}")
 
         # 拖动记录
         self._drag = None
@@ -161,7 +162,7 @@ class FloatBar:
         shape = Image.new('RGBA', (56, 56))
         ImageDraw.Draw(shape).ellipse((8, 8, 47, 47), fill=color)
         self._dot_image = ImageTk.PhotoImage(
-            shape.resize((14, 14), Image.Resampling.LANCZOS), master=self.dot)
+            shape.resize((UK.px(14), UK.px(14)), Image.Resampling.LANCZOS), master=self.dot)
         self.dot.itemconfigure(self._dot_id, image=self._dot_image)
         self._dot_color = color
 
@@ -295,7 +296,7 @@ class FloatBar:
             if width <= 1 or height <= 1:
                 return
             # Tk 已经处理 DPI；再次乘 GetDpiForWindow 会让三个圆角落到窗外。
-            self.dpi_scale = width / max(1, self.win.winfo_width())
+            self.dpi_scale = width / max(1, self.win.winfo_width()) * UK.S
             diameter = max(2, round(RADIUS * 2 * self.dpi_scale))
             geometry = (hwnd, width, height, diameter)
             if geometry == getattr(self, "_region_geometry", None):
@@ -334,30 +335,30 @@ class FloatBar:
     def _fit(self):
         """自适应内容；超长字幕限制高度并提供滚动。"""
         try:
-            max_h = max(MIN_H, int(self.win.winfo_screenheight() * 0.55))
+            max_h = max(MIN_H, int(UK.lpx(self.win.winfo_screenheight()) * 0.55))
             self._apply_wrap()
             self.card.update_idletasks()
-            content_h = self.content.winfo_reqheight()
-            overhead = self.card.body.winfo_reqheight() - self.content_canvas.winfo_reqheight() + 2 * self.card.pad + 12
+            content_h = UK.lpx(self.content.winfo_reqheight())
+            overhead = UK.lpx(self.card.body.winfo_reqheight()) - self.content_canvas.winfo_reqheight() + 2 * self.card.pad + 12
             viewport_h = max(30, max_h - overhead)
             needs_scroll = content_h > viewport_h
             if needs_scroll and not self.scroll.winfo_manager():
                 self.scroll.pack(side="right", fill="y", before=self.content_canvas)
                 self._apply_wrap()
                 self.card.update_idletasks()
-                content_h = self.content.winfo_reqheight()
+                content_h = UK.lpx(self.content.winfo_reqheight())
             elif not needs_scroll and self.scroll.winfo_manager():
                 self.scroll.pack_forget()
                 self._apply_wrap()
                 self.card.update_idletasks()
-                content_h = self.content.winfo_reqheight()
+                content_h = UK.lpx(self.content.winfo_reqheight())
             self.content_canvas.configure(height=min(content_h, viewport_h),
                                           scrollregion=(0, 0, 0, content_h))
             h = max(MIN_H, min(max_h, max(overhead + content_h, self.user_h)))
             if abs(h - self.h) > 1:
                 self.h = h
                 x, y = self.win.winfo_x(), self.win.winfo_y()
-                self.win.geometry(f"{self.w}x{h}+{x}+{y}")
+                self.win.geometry(f"{UK.px(self.w)}x{UK.px(h)}+{x}+{y}")
                 self._round_window()
         except tk.TclError:
             pass
@@ -371,14 +372,14 @@ class FloatBar:
         if not self._resize:
             return "break"
         x0, y0, w0, h0 = self._resize
-        nw = max(MIN_W, w0 + (e.x_root - x0))
-        nh = max(MIN_H, h0 + (e.y_root - y0))
+        nw = max(MIN_W, w0 + UK.lpx(e.x_root - x0))
+        nh = max(MIN_H, h0 + UK.lpx(e.y_root - y0))
         # self.h 必须同步跟上：_fit 用它与目标高度比较，不同步的话松开鼠标后
         # 会误判「尺寸没变」而跳过重排。
         self.w, self.user_h, self.h = nw, nh, nh
         self._apply_wrap()
         try:
-            self.win.geometry(f"{nw}x{nh}+{self.win.winfo_x()}+{self.win.winfo_y()}")
+            self.win.geometry(f"{UK.px(nw)}x{UK.px(nh)}+{self.win.winfo_x()}+{self.win.winfo_y()}")
         except tk.TclError:
             pass
         self._round_window()
@@ -454,7 +455,7 @@ class FloatBar:
         try:
             # 新实例按配置值建窗，这里要按旧的实时尺寸摆回去（_fit 会因
             # 「尺寸没变」提前返回，不会替我们改窗口）
-            bar.win.geometry(f"{w}x{h}+{bar.win.winfo_x()}+{bar.win.winfo_y()}")
+            bar.win.geometry(f"{UK.px(w)}x{UK.px(h)}+{bar.win.winfo_x()}+{bar.win.winfo_y()}")
         except tk.TclError:
             pass
         bar._apply_wrap()

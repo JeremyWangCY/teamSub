@@ -217,9 +217,7 @@ def open_settings(self, page="服务"):
         t_brief.grid(row=0,column=0,sticky='nsew')
         terms_header=tk.Frame(edits,bg=W)
         terms_header.grid(row=1,column=0,sticky='we',pady=(6,2))
-        lab(terms_header,'译名对照').pack(side='left')
-        tk.Label(terms_header,text='每行 原文=译文 · 适用于 OpenAI 兼容引擎',
-                 bg=W,fg=UK.C.T3,font=UK.F_MINI).pack(side='right')
+        lab(terms_header,'译名对照  原文=译文').pack(side='left')
         t_gloss=UK.RoundedText(edits,lines=2,bg=W)
         t_gloss.grid(row=2,column=0,sticky='nsew')
 
@@ -345,7 +343,7 @@ def open_settings(self, page="服务"):
                 text=(f'下载中 {received*100//total}% · {received/1048576:.1f} / {total/1048576:.1f} MB'
                       if phase=='downloading' else '正在取消…')
                 update_bar.pack(fill='x',before=update_actions,pady=(0,16))
-                width=max(20,update_page.winfo_width())
+                width=max(20,UK.lpx(update_page.winfo_width()))
                 update_bar.delete('all')
                 UK.round_rect(update_bar,0,0,width-1,7,4,fill=UK.C.N100)
                 if received:
@@ -396,7 +394,7 @@ def open_settings(self, page="服务"):
         def refresh_topic_state():
             current=state['key'] == self.tcfg.topic and state['key'] in topics
             lbl_topic_state.configure(
-                text='当前主题 · 修改后保存生效' if current else '待切换 · 保存后生效',
+                text='' if current else '待切换',
                 fg=UK.C.SUB if current else UK.C.A600)
 
         def load_fields(key):

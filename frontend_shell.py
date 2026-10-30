@@ -14,9 +14,11 @@ def fit_initial_window(root):
             width, height = area.right - area.left, area.bottom - area.top
     except (AttributeError, OSError):
         pass
-    usable_width, usable_height = max(640, width - 32), max(480, height - 64)
-    root.minsize(min(1000, usable_width), min(640, usable_height))
-    root.geometry(f'{min(1280, usable_width)}x{min(820, usable_height)}')
+    # 屏幕尺寸是物理像素，窗口目标尺寸按逻辑像素给出再换算
+    px = UK.px
+    usable_width, usable_height = max(px(640), width - px(32)), max(px(480), height - px(64))
+    root.minsize(min(px(1000), usable_width), min(px(640), usable_height))
+    root.geometry(f'{min(px(1280), usable_width)}x{min(px(820), usable_height)}')
 
 def refresh_topic(self):
     from collections import Counter
@@ -51,7 +53,7 @@ def build_nav(self, parent):
     nav.pack_propagate(False)
     head = tk.Frame(nav, bg=UK.C.N100)
     head.pack(fill="x", padx=18, pady=(22, 22))
-    self._brand_img = ImageTk.PhotoImage(brand.render(28), master=nav)
+    self._brand_img = ImageTk.PhotoImage(brand.render(UK.px(28)), master=nav)
     tk.Label(head, image=self._brand_img, bg=UK.C.N100).pack(side="left")
     tk.Label(head, text="TeamsSub", font=UK.F_HEAD, bg=UK.C.N100,
              fg=UK.C.TEXT).pack(side="left", padx=(10, 0))
@@ -61,7 +63,7 @@ def build_nav(self, parent):
         btn = UK.Pill(nav, label, getattr(self, action),
                       kind="selected" if label == "实时会议" else "ghost",
                       height=40, padx=12, bg=UK.C.N100, font=font, align="left",
-                      icon=icon, icon_size=18, tooltip=f"{label}（{key}）")
+                      icon=icon, icon_size=18, tooltip=key)
         btn.pack(fill="x", padx=10, pady=2)
         self.nav_buttons[label] = btn
     try:
@@ -73,7 +75,7 @@ def build_nav(self, parent):
                                                         padx=24, pady=(0, 16))
     help_btn = UK.Pill(nav, "帮助", self.show_help, kind="ghost", height=40, padx=12,
                        bg=UK.C.N100, font=font, align="left", icon="help", icon_size=18,
-                       tooltip="帮助与快捷键（F1）")
+                       tooltip="F1")
     help_btn.pack(side="bottom", fill="x", padx=10, pady=(0, 6))
     self.nav_buttons["帮助"] = help_btn
     return nav
@@ -102,39 +104,34 @@ def build(self):
     r.pack(fill="both", expand=True)
     # ---------- 顶栏 ----------
     head = tk.Frame(r, bg=UK.C.N50)
-    head.pack(fill="x", padx=24, pady=(20, 12))
+    head.pack(fill="x", padx=24, pady=(18, 12))
 
     lt = tk.Frame(head, bg=UK.C.N50)
     lt.pack(side="left")
-    # 标题行：页面名 + 会议模式切换控件
-    trow = tk.Frame(lt, bg=UK.C.N50)
-    trow.pack(anchor="w")
-    tk.Label(trow, text="实时会议", bg=UK.C.N50, fg=UK.C.TEXT,
-             font=UK.F_TITLE).pack(side="left")
-    self.mode_sw = UK.ModeSwitch(trow, modes=MD.all_modes(), value=self.mode,
+    # 会议模式切换 + 当前会议名，一行放下
+    self.mode_sw = UK.ModeSwitch(lt, modes=MD.all_modes(), value=self.mode,
                                  command=self.set_mode,
                                  on_blocked=self.on_mode_blocked,
                                  bg=UK.C.N50)
-    self.mode_sw.pack(side="left", padx=(14, 0))
+    self.mode_sw.pack(side="left")
     self.lbl_meeting = tk.Label(lt, text=self._meeting_txt, bg=UK.C.N50,
-                                fg=UK.C.SUB, font=UK.F_SMALL)
-    self.lbl_meeting.pack(anchor="w", pady=(3, 0))
+                                fg=UK.C.TEXT, font=UK.F_HEAD)
+    self.lbl_meeting.pack(side="left", padx=(12, 0))
 
     rt = tk.Frame(head, bg=UK.C.N50)
     rt.pack(side="right")
     self.status = UK.StatusPill(rt, "连接中", bg=UK.C.N50)
     self.status.pack(side="left", padx=(0, 12))
     self.btn_export = UK.Pill(rt, "导出整场会议", self.export, kind="primary", height=36,
-                              icon="export", tooltip="导出整场会议（Ctrl+E）")
+                              icon="export", tooltip="Ctrl+E")
     self.btn_export.pack(side="right", padx=(8, 0))
     self.btn_more = UK.Pill(rt, "", self._open_menu, kind="ghost", padx=10,
-                            icon="more", icon_size=18, tooltip="更多操作")
+                            icon="more", icon_size=18, tooltip="更多")
     self.btn_more.pack(side="right", padx=(6, 0))
     self.btn_settings = UK.Pill(rt, "设置", self.open_settings, kind="ghost", icon="settings")
     # 设置入口也常驻在左侧导航里，这里不再重复放一个按钮。
     self.btn_tr = UK.Pill(rt, "翻译 开" if self.trans_on else "翻译 关", self.toggle_translate,
-                          kind="tint" if self.trans_on else "ghost", icon="translate",
-                          tooltip="开关实时翻译（服务在 设置 → 服务 中配置）")
+                          kind="tint" if self.trans_on else "ghost", icon="translate")
     self.btn_tr.pack(side="right")
 
     # ---------- 检索 + 翻译方向 ----------
@@ -174,13 +171,13 @@ def build(self):
             return
         win = tip["window"] = tk.Toplevel(self.topic_select)
         win.overrideredirect(True)
-        tk.Label(win, text=f"当前翻译主题：{self._translation_topic_name()}\n切换后立即保存，新字幕按此主题翻译\n在设置 → 主题中编辑会议背景与译名对照",
+        tk.Label(win, text=self._translation_topic_name(),
                  bg=UK.C.N100, fg=UK.C.TEXT, font=UK.F_SMALL, padx=12, pady=8,
                  wraplength=360, justify="left").pack()
         win.update_idletasks()
         x = min(self.topic_select.winfo_rootx(),
                 self.root.winfo_screenwidth() - win.winfo_reqwidth())
-        win.geometry(f"+{max(0, x)}+{self.topic_select.winfo_rooty() + 40}")
+        win.geometry(f"+{max(0, x)}+{self.topic_select.winfo_rooty() + UK.px(40)}")
     def queue_topic_tip(event=None):
         hide_topic_tip()
         tip["after"] = self.root.after(400, show_topic_tip)
@@ -217,8 +214,6 @@ def build(self):
     side.configure(width=200)
     side.pack(side="left", fill="y")
     side.pack_propagate(False)
-    tk.Label(side.body, text="发言人", bg=UK.C.N0, fg=UK.C.T3,
-             font=UK.F_MINI).pack(anchor="w", padx=8, pady=(0, 8))
     self.speakers = UK.SpeakerList(side.body, on_pick=self.on_pick_speaker,
                                    bg=UK.C.N0)
     self.speakers.pack(fill="both", expand=True)
@@ -228,18 +223,18 @@ def build(self):
     self.display_switch = UK.Segmented(readbar, ["双语", "原文", "译文"], command=self.set_display, bg=UK.C.N50)
     self.display_switch.pack(side="left")
     self.display_switch.set({"both":0, "source":1, "translation":2}.get(getattr(self, "display_mode", "both"), 0))
-    UK.Pill(readbar, "字号 / 间距", self.open_reading, kind="ghost", icon="text-size",
-            tooltip="正文字号与行距").pack(side="left", padx=12)
+    UK.Pill(readbar, "字号 / 间距", self.open_reading, kind="ghost",
+            icon="text-size").pack(side="left", padx=12)
     self.btn_pause = UK.Pill(readbar, "继续采集" if self.paused else "暂停采集", self.toggle_pause,
                              kind="ghost", icon={"暂停采集": "pause", "继续采集": "play"},
-                             icon_size=14, tooltip="暂停时不记录新字幕")
+                             icon_size=14)
     self.btn_pause.pack(side="right")
-    UK.Pill(readbar, "结束", self.end_meeting, kind="danger", padx=12, icon="stop", icon_size=14,
-            tooltip="归档当前会议并暂停采集").pack(side="right", padx=4)
-    UK.Pill(readbar, "新建", self.new_meeting, kind="ghost", padx=12, icon="plus",
-            tooltip="归档当前会议并开始新记录").pack(side="right", padx=4)
+    UK.Pill(readbar, "结束", self.end_meeting, kind="danger", padx=12, icon="stop",
+            icon_size=14).pack(side="right", padx=4)
+    UK.Pill(readbar, "新建", self.new_meeting, kind="ghost", padx=12,
+            icon="plus").pack(side="right", padx=4)
     UK.Pill(readbar, "清屏", self.clear, kind="ghost", icon="clear",
-            tooltip="只隐藏显示，记录保留（Ctrl+L）").pack(side="right", padx=4)
+            tooltip="Ctrl+L").pack(side="right", padx=4)
     card = UK.Card(body, radius=UK.R_CARD, padding=16, bg=UK.C.N50)
     card.pack(side="left", fill="both", expand=True, padx=(14, 0))
 
@@ -318,9 +313,9 @@ def bind_shortcuts(self):
 
 
 EMPTY_STATES = {
-    "waiting": ("等待字幕", "在会议软件中打开实时字幕，内容会自动出现在这里。"),
-    "cleared": ("已清屏", "新的字幕会继续显示在这里，整场记录仍保存并可导出。"),
-    "filtered": ("没有匹配的字幕", "换个关键词，或清空搜索与发言人筛选。"),
+    "waiting": ("等待字幕", ""),
+    "cleared": ("已清屏", ""),
+    "filtered": ("没有匹配的字幕", ""),
 }
 
 
@@ -346,7 +341,7 @@ def set_empty_state(self, reason):
     if reason == "waiting":
         how = (MD.get(getattr(self, "mode", "")) or {}).get("hint")
         if how:
-            hint = f"{hint}\n{how}"
+            hint = how
     try:
         self.empty_title.configure(text=title)
         self.empty_hint.configure(text=hint)

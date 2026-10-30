@@ -81,7 +81,8 @@ class ShellLayoutTests(ShellTestCase):
                                  (self.app.show_help, '帮助')):
             open_page()
             self.pump()
-            self.assertIn(title, self.sheet_labels())
+            # 位置由导航高亮表明，页面不再重复标题
+            self.assertNotIn(title, self.sheet_labels())
             self.assertNotIn('返回', self.sheet_pills())
             self.assertEqual(self.app.nav_buttons[title].kind, 'selected')
             # 内推层盖住整个主区，实时页的标题不再露出来

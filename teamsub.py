@@ -941,6 +941,7 @@ class App:
         if self.float_on:
             self.float_bar = floatbar.FloatBar(self)
             self.float_sync(force=True)
+        self._veil = RestoreVeil(self.root) if sys.platform == "win32" else None
         self.root.bind("<Unmap>", self._on_minimize)
         self.root.bind("<Map>", self._on_restore)
         self.root.after(100, self.pump)
@@ -989,6 +990,9 @@ class App:
             return
         if not self._own_window_event(e):
             return                      # 子孙控件被销毁/隐藏，不是最小化
+        veil = getattr(self, "_veil", None)
+        if veil is not None and e is not None:
+            veil.hide()                 # 最小化或收进托盘，下次 <Map> 再显示
         if getattr(self, "_min_switching", False):
             return                      # 自身 iconify/withdraw 触发的 <Unmap>
         if getattr(self, "_tray_hidden", False):
@@ -1136,6 +1140,9 @@ class App:
         """从最小化还原时收起悬浮条（启动时的普通 Map 事件不打扰）。"""
         if not self._own_window_event(e):
             return                      # 子控件被 map，不代表主窗口还原
+        veil = getattr(self, "_veil", None)
+        if veil is not None:
+            veil.reveal_soon()
         if getattr(self, "_min_switching", False):
             return
         if not getattr(self, "_was_iconic", False):
@@ -1324,6 +1331,9 @@ class App:
                 return
             if user32.IsIconic(hwnd):
                 return
+            veil = getattr(self, "_veil", None)
+            if veil is not None and veil.veiled:
+                veil.reveal_soon()      # 外部 ShowWindow 还原不发 <Map>，兜底显示
             if getattr(self, "_was_iconic", False) or getattr(self, "_tray_hidden", False):
                 # 主窗口已被还原（点击任务栏、单实例接管、托盘都算）→ 收悬浮条
                 self._was_iconic = False
@@ -3402,6 +3412,77 @@ def _acquire_single_instance() -> bool:
         return False
     except Exception:
         return True        # 单实例机制自身出错时宁可照常启动，不挡用户
+
+
+class RestoreVeil:
+    """从最小化/托盘还原时，等子控件画完再显示主窗口，去掉一闪而过的黑块。
+
+    Windows 在窗口最小化后会丢掉 Tk 子窗口的画面，还原时每个按钮、卡片
+    都是黑色的，要等 Tk 的空闲重绘补上（约 100–200ms）。纯 Tk 窗口也一样。
+    这里让主窗口常驻分层窗口（不透明度 255，外观不变）：隐藏时把不透明度
+    降到 0，<Map> 后先刷新、再等一小会儿恢复。直接走 Win32，不经过
+    ``wm attributes -alpha``——Tk 在 1.0 时会去掉分层样式，那一步本身又会
+    触发整窗重绘、黑块照旧。
+    """
+
+    DELAY_MS = 120
+
+    def __init__(self, root):
+        self.root = root
+        self.hwnd = None
+        self.veiled = False
+        self._pending = None
+        try:
+            import ctypes
+            from ctypes import wintypes
+            user32 = ctypes.windll.user32
+            user32.GetAncestor.argtypes = (wintypes.HWND, wintypes.UINT)
+            user32.GetAncestor.restype = wintypes.HWND
+            user32.GetWindowLongW.argtypes = (wintypes.HWND, ctypes.c_int)
+            user32.SetWindowLongW.argtypes = (wintypes.HWND, ctypes.c_int, ctypes.c_long)
+            user32.SetLayeredWindowAttributes.argtypes = (
+                wintypes.HWND, wintypes.DWORD, ctypes.c_ubyte, wintypes.DWORD)
+            root.update_idletasks()
+            hwnd = user32.GetAncestor(root.winfo_id(), 2)        # GA_ROOT
+            style = user32.GetWindowLongW(hwnd, -20)             # GWL_EXSTYLE
+            user32.SetWindowLongW(hwnd, -20, style | 0x80000)    # WS_EX_LAYERED
+            if not user32.SetLayeredWindowAttributes(hwnd, 0, 255, 2):   # LWA_ALPHA
+                return
+            self._user32, self.hwnd = user32, hwnd
+        except Exception:
+            self.hwnd = None
+
+    def _alpha(self, value):
+        if self.hwnd:
+            self._user32.SetLayeredWindowAttributes(self.hwnd, 0, value, 2)
+
+    def hide(self):
+        if not self.hwnd:
+            return
+        if self._pending is not None:
+            self.root.after_cancel(self._pending)
+            self._pending = None
+        self._alpha(0)
+        self.veiled = True
+
+    def reveal_soon(self):
+        if not self.veiled or self._pending is not None:
+            return
+        try:
+            self.root.update_idletasks()
+        except tk.TclError:
+            pass
+        self._pending = self.root.after(self.DELAY_MS, self.reveal)
+
+    def reveal(self):
+        self._pending = None
+        if self.veiled:
+            try:
+                self.root.update_idletasks()     # 把还原后排队的重绘画完再露脸
+            except tk.TclError:
+                pass
+            self._alpha(255)
+            self.veiled = False
 
 
 def _enable_dpi_awareness():

@@ -214,5 +214,36 @@ class RecoveryPromptTests(ShellTestCase):
         previous.unlink()
 
 
+class RestoreVeilTests(unittest.TestCase):
+    def setUp(self):
+        self.root = tk.Tk()
+        self.root.geometry('300x200')
+        self.root.update()
+
+    def tearDown(self):
+        self.root.destroy()
+
+    def test_hidden_until_reveal_then_opaque(self):
+        veil = A.RestoreVeil(self.root)
+        self.assertIsNotNone(veil.hwnd)
+        alphas = []
+        veil._alpha = alphas.append
+        veil.reveal_soon()                      # 没隐藏过：不排队
+        self.assertIsNone(veil._pending)
+        veil.hide()
+        self.assertTrue(veil.veiled)
+        veil.reveal_soon()
+        veil.reveal_soon()                      # 重复的 <Map> 只排一次
+        self.assertIsNotNone(veil._pending)
+        veil.hide()                             # 还没露脸又被最小化：撤掉旧的定时
+        self.assertIsNone(veil._pending)
+        veil.reveal_soon()
+        deadline = time.monotonic() + 2
+        while veil.veiled and time.monotonic() < deadline:
+            self.root.update()
+        self.assertFalse(veil.veiled)
+        self.assertEqual(alphas, [0, 0, 255])
+
+
 if __name__ == '__main__':
     unittest.main()

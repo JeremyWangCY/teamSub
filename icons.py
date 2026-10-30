@@ -217,7 +217,41 @@ def _info(d, p, c, w):
     _circle(d, p, 12, 7.8, 1.05, c, fill=True)
 
 
+def _copy(d, p, c, w):
+    _rrect(d, p, 8.5, 8.5, 20, 20, 2.5, c, w)
+    _line(d, p, [(15.5, 5.5), (15.5, 5), (14, 4), (5.5, 4), (4, 5.5), (4, 14),
+                 (5, 15.5), (5.5, 15.5)], c, w)
+
+
+def _undo(d, p, c, w):
+    # 重置：回钩箭头，和「刷新」的整圈箭头区分开
+    _line(d, p, [(8.5, 4.5), (4, 9), (8.5, 13.5)], c, w)
+    _line(d, p, [(4, 9), (14.5, 9)], c, w)
+    _arc(d, p, 14.5, 14.25, 5.25, -90, 90, c, w)
+    _line(d, p, [(14.5, 19.5), (8, 19.5)], c, w)
+
+
+def _download(d, p, c, w):
+    _line(d, p, [(12, 4), (12, 15)], c, w)
+    _line(d, p, [(7.5, 10.5), (12, 15), (16.5, 10.5)], c, w)
+    _line(d, p, [(4.5, 16), (4.5, 19.5), (19.5, 19.5), (19.5, 16)], c, w)
+
+
+def _probe(d, p, c, w):
+    # 检测：脉冲线
+    _line(d, p, [(3, 12.5), (7.5, 12.5), (10, 6), (14, 18.5), (16.5, 12.5), (21, 12.5)], c, w)
+
+
+def _restore(d, p, c, w):
+    # 恢复内置：盒子 + 向上箭头
+    _line(d, p, [(4, 9.5), (4, 19.5), (20, 19.5), (20, 9.5)], c, w)
+    _line(d, p, [(12, 15.5), (12, 3.8)], c, w)
+    _line(d, p, [(8, 7.8), (12, 3.8), (16, 7.8)], c, w)
+
+
 _SHAPES = {
+    "copy": _copy, "undo": _undo, "download": _download, "probe": _probe,
+    "restore": _restore,
     "live": _live, "history": _history, "settings": _settings, "help": _help,
     "search": _search, "export": _export, "more": _more, "translate": _translate,
     "pause": _pause, "play": _play, "plus": _plus, "stop": _stop, "trash": _trash,

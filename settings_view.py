@@ -67,11 +67,11 @@ def open_settings(self, page="服务"):
         profile_select = UK.Select(profile_row, list(profiles), value=active_profile['name'],
                                    command=lambda name: switch_profile(name), bg=W, height=34, width=180)
         profile_select.pack(side='left', fill='x', expand=True)
-        UK.Pill(profile_row, '新建', lambda: new_profile(), kind='secondary',
+        UK.Pill(profile_row, '新建', lambda: new_profile(), kind='secondary', icon='plus',
                 bg=W, height=34, padx=12).pack(side='left', padx=(8,0))
-        UK.Pill(profile_row, '重命名', lambda: rename_profile(), kind='ghost',
+        UK.Pill(profile_row, '重命名', lambda: rename_profile(), kind='ghost', icon='edit',
                 bg=W, height=34, padx=10).pack(side='left', padx=(4,0))
-        UK.Pill(profile_row, '删除', lambda: delete_profile(), kind='ghost',
+        UK.Pill(profile_row, '删除', lambda: delete_profile(), kind='danger', icon='trash',
                 bg=W, height=34, padx=12).pack(side='left', padx=(4,0))
         form=tk.Frame(service,bg=W);form.pack(fill='x')
         engine_cell=cell(form,'引擎',0)
@@ -113,7 +113,8 @@ def open_settings(self, page="服务"):
 
             threading.Thread(target=work,daemon=True).start()
 
-        UK.Pill(reason_row,'检测',do_probe,kind='ghost',bg=W,height=36,padx=10).pack(
+        UK.Pill(reason_row,'检测',do_probe,kind='secondary',icon='probe',bg=W,height=36,padx=12,
+                tooltip='检测这个模型支持的思考强度参数').pack(
             side='left',padx=(6,0))
 
         def snapshot_profile():
@@ -319,11 +320,11 @@ def open_settings(self, page="服务"):
                 UW.start_download(self,state_update['release'])
             render_update()
 
-        check_button=UK.Pill(update_actions,'检查更新',check_updates,kind='primary',bg=W,height=36)
+        check_button=UK.Pill(update_actions,'检查更新',check_updates,kind='primary',icon='refresh',bg=W,height=36)
         check_button.pack(side='left')
-        release_button=UK.Pill(update_actions,'前往下载',open_release,kind='secondary',bg=W,height=36)
-        manual_button=UK.Pill(update_actions,'手动下载',open_release,kind='ghost',bg=W,height=36)
-        cancel_button=UK.Pill(update_actions,'取消下载',lambda: UW.cancel_download(self),kind='ghost',bg=W,height=36)
+        release_button=UK.Pill(update_actions,'前往下载',open_release,kind='secondary',icon='link',bg=W,height=36)
+        manual_button=UK.Pill(update_actions,'手动下载',open_release,kind='ghost',icon='download',bg=W,height=36)
+        cancel_button=UK.Pill(update_actions,'取消下载',lambda: UW.cancel_download(self),kind='ghost',icon='close',bg=W,height=36)
 
         def render_update():
             phase=state_update['phase']
@@ -481,12 +482,15 @@ def open_settings(self, page="服务"):
                 load_fields(state["key"])
                 refresh(state["key"])
 
-        for text, cmd in (("+", do_new), ("复制", do_clone),
-                          ("删除", do_delete), ("重置", do_reset)):
-            UK.Pill(tb, text, cmd, kind="ghost", height=26, padx=9, bg=W).pack(
-                side="left", padx=(0, 4))
-        btn_restore = UK.Pill(tb, "恢复内置", do_restore, kind="ghost",
-                              height=26, padx=9, bg=W)
+        for text, cmd, icon, tip in (("新建", do_new, "plus", "新建空白主题"),
+                                     ("复制", do_clone, "copy", "以当前主题为模板复制一份"),
+                                     ("删除", do_delete, "trash", None),
+                                     ("重置", do_reset, "undo", "内置主题恢复为默认内容")):
+            UK.Pill(tb, text, cmd, kind="ghost", icon=icon, icon_size=14, tooltip=tip,
+                    height=30, padx=10, bg=W).pack(side="left", padx=(0, 2))
+        btn_restore = UK.Pill(tb, "恢复内置", do_restore, kind="ghost", icon="restore",
+                              icon_size=14, tooltip="找回已删除的内置主题",
+                              height=30, padx=10, bg=W)
         btn_restore.pack(side="left", padx=(0, 4))
 
         def collect():
@@ -647,9 +651,10 @@ def open_settings(self, page="服务"):
             except Exception:
                 pass            # 面板已被关闭/重建，无需复位
 
-        btn_save = UK.Pill(bottom, "保存", do_save, kind="primary", bg=UK.C.N50, height=38, padx=24)
+        btn_save = UK.Pill(bottom, "保存", do_save, kind="primary", icon="check", bg=UK.C.N50, height=38, padx=22)
         btn_save.pack(side="right")
-        UK.Pill(bottom, "测试", do_test, kind="secondary", bg=UK.C.N50, height=38, padx=20).pack(side="right",
+        UK.Pill(bottom, "测试", do_test, kind="secondary", icon="translate", tooltip="用当前设置翻译一句试试",
+                bg=UK.C.N50, height=38, padx=18).pack(side="right",
                                                                  padx=(10, 0))
 
         refresh(state["key"])

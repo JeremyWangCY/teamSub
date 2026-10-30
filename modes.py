@@ -10,6 +10,7 @@ TeamsSub 从不同会议软件读取实时字幕。每种模式一条记录：
     dot         标识色（浅色主题）
     dot_dark    标识色（深色主题，整体提亮）
     available   False = 尚未支持：UI 置灰并标注「即将支持」，点击只提示不切换
+    hint        空状态里提示用户如何在该客户端打开字幕
 
 新增一种会议模式（如飞书）只需两步，UI / 配置 / 窗口标题 / 导出名全部由本表驱动：
 
@@ -25,6 +26,7 @@ MODES = [
         "desc": "Microsoft Teams 实时字幕",
         "dot": "#4A67F6",
         "dot_dark": "#6E87FF",
+        "hint": "Teams：更多 → 语言和语音 → 打开实时字幕",
         "available": True,
     },
     {
@@ -34,6 +36,7 @@ MODES = [
         "desc": "飞书会议实时字幕",
         "dot": "#3370FF",
         "dot_dark": "#5B8DEF",
+        "hint": "飞书：在会议工具栏点击「字幕」开启",
         "available": True,
     },
 ]

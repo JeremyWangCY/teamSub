@@ -129,9 +129,12 @@ class TrayIcon:
                 win32gui.ShowWindow(self._hwnd, win32con.SW_SHOWNOACTIVATE)
             except Exception:
                 pass
+            # 托盘用小图标尺寸（SM_CXSMICON，随 DPI 变化）。LR_DEFAULTSIZE 取的是
+            # 32px 大图标，再被系统缩到 16px，托盘里会发糊。
+            small = win32api.GetSystemMetrics(win32con.SM_CXSMICON) or 16
             self._icon = win32gui.LoadImage(
-                0, self.icon_path, win32con.IMAGE_ICON, 0, 0,
-                win32con.LR_LOADFROMFILE | win32con.LR_DEFAULTSIZE)
+                0, self.icon_path, win32con.IMAGE_ICON, small, small,
+                win32con.LR_LOADFROMFILE)
             self._ok = bool(self._add())
         except Exception:
             self._ok = False

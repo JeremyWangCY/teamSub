@@ -209,13 +209,16 @@ def open_history(app):
             search.var.set(state['query'])
         frame = tk.Frame(b, bg=UK.C.N0)
         frame.pack(fill='both',expand=True)
+        # 扁平列表：与卡片同底色，细线分隔，主题色选中，配细滚动条。
         listing = tk.Listbox(frame, height=3, selectmode='extended', exportselection=False,
-                             bg=UK.C.N100, fg=UK.C.TEXT, font=UK.F_UI, bd=0, highlightthickness=0,
-                             selectbackground=UK.C.A100, selectforeground=UK.C.TEXT, activestyle='none')
+                             bg=UK.C.N0, fg=UK.C.TEXT, font=(UK.FAMILY, 11), bd=0,
+                             highlightthickness=1, highlightbackground=UK.C.LINE,
+                             highlightcolor=UK.C.LINE_D, relief='flat',
+                             selectbackground=UK.C.A100, selectforeground=UK.C.TEXT,
+                             selectborderwidth=4, activestyle='none')
+        sb = UK.ThinScroll(frame, listing, bg=UK.C.N0)
+        sb.pack(side='right', fill='y', padx=(6, 0))
         listing.pack(side='left', fill='both', expand=True)
-        sb = tk.Scrollbar(frame, command=listing.yview)
-        sb.pack(side='right', fill='y')
-        listing.configure(yscrollcommand=sb.set)
         def update_status():
             if not state['loaded']:
                 status.configure(text='正在读取本地记录…')
@@ -308,7 +311,8 @@ def open_history(app):
                 state['all'] = [session if s.path == session.path else s for s in state['all']]
                 filter_list()
             rename_meeting(app, sessions[0], renamed)
-        UK.Pill(search_row, '重命名', rename_selected, kind='secondary', bg=UK.C.N0).pack(side='left', padx=8)
+        UK.Pill(search_row, '重命名', rename_selected, kind='secondary', bg=UK.C.N0,
+                icon='edit', tooltip='重命名所选会议（F2）').pack(side='left', padx=8)
         listing.bind('<F2>', lambda e: rename_selected())
         def read(action):
             sessions = selected()
@@ -411,17 +415,21 @@ def open_history(app):
         app._sheet_footer.pack(side='bottom',fill='x',padx=24,pady=(8,12))
         row = tk.Frame(app._sheet_footer,bg=UK.C.N50)
         row.pack(fill='x')
-        for text, action, kind in [('打开记录','view','tint'), ('导出 / 合并所选','export','primary'), ('续接所选会议','resume','ghost')]:
-            UK.Pill(row,text,lambda a=action: read(a),kind=kind).pack(side='left',padx=(0,12))
-        UK.Pill(row,'删除',do_delete,kind='ghost').pack(side='left',padx=(0,12))
+        # 1000px 最小窗口下整排要放得下：只给主操作配图标。
+        for text, action, kind, icon in [('打开记录','view','tint',None),
+                                         ('导出 / 合并所选','export','primary','export'),
+                                         ('续接所选会议','resume','ghost',None)]:
+            UK.Pill(row,text,lambda a=action: read(a),kind=kind,icon=icon).pack(side='left',padx=(0,10))
+        UK.Pill(row,'删除',do_delete,kind='danger',icon='trash',
+                tooltip='移入系统回收站，可还原').pack(side='left',padx=(0,10))
         def open_records_folder():
             try:
                 CAPTION_DIR.mkdir(parents=True, exist_ok=True)
                 os.startfile(str(CAPTION_DIR.resolve()))
             except OSError as exc:
                 app._notice('无法打开记录文件夹：' + str(exc))
-        UK.Pill(row,'刷新',refresh,kind='ghost').pack(side='right')
-        UK.Pill(row,'打开记录文件夹',open_records_folder,kind='secondary').pack(side='right',padx=(0,12))
+        UK.Pill(row,'刷新',refresh,kind='ghost',icon='refresh').pack(side='right')
+        UK.Pill(row,'打开记录文件夹',open_records_folder,kind='secondary').pack(side='right',padx=(0,8))
         listing.bind('<Double-Button-1>',lambda e: read('view'))
         refresh()
     app._show_sheet('历史会议', build)

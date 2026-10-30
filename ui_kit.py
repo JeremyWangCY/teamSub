@@ -10,6 +10,7 @@ tkinter 原生没有圆角，这里用 Canvas 画形状、再用 window item 承
 import tkinter as tk
 import tkinter.font as tkfont
 from PIL import Image, ImageDraw, ImageTk
+import icons
 import math
 import re
 
@@ -305,13 +306,67 @@ class Card(tk.Frame):
         self.cv.tag_lower("bgshape")
 
 
+# ------------------------------------------------------------------ 悬停提示
+class Tooltip:
+    """延时出现的小提示；纯图标按钮靠它说明用途。text 可为可调用对象（取实时文案）。"""
+
+    DELAY = 450
+
+    def __init__(self, widget, text):
+        self.widget, self.text = widget, text
+        self._after = None
+        self._win = None
+        widget.bind("<Enter>", self._queue, add="+")
+        for ev in ("<Leave>", "<ButtonPress>", "<Destroy>"):
+            widget.bind(ev, self._hide, add="+")
+
+    def _queue(self, _=None):
+        self._hide()
+        self._after = self.widget.after(self.DELAY, self._show)
+
+    def _show(self):
+        self._after = None
+        text = self.text() if callable(self.text) else self.text
+        if not text or not self.widget.winfo_exists():
+            return
+        win = self._win = tk.Toplevel(self.widget)
+        win.overrideredirect(True)
+        try:
+            win.attributes("-topmost", True)
+        except tk.TclError:
+            pass
+        tk.Label(win, text=text, bg=C.TEXT, fg=C.N0, font=F_MINI,
+                 padx=8, pady=4, justify="left").pack()
+        win.update_idletasks()
+        x = self.widget.winfo_rootx() + (self.widget.winfo_width() - win.winfo_reqwidth()) // 2
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+        x = max(0, min(x, self.widget.winfo_screenwidth() - win.winfo_reqwidth()))
+        win.geometry(f"+{x}+{y}")
+
+    def _hide(self, _=None):
+        if self._after is not None:
+            try:
+                self.widget.after_cancel(self._after)
+            except tk.TclError:
+                pass
+            self._after = None
+        if self._win is not None:
+            try:
+                self._win.destroy()
+            except tk.TclError:
+                pass
+            self._win = None
+
+
 # ------------------------------------------------------------------ 胶囊按钮
 class Pill(tk.Canvas):
     """圆角按钮；蓝色强调、灰色常规、柔红色谨慎操作。"""
 
     def __init__(self, master, text, command=None, kind="ghost", height=H_PILL,
-                 padx=14, bg=None, font=F_SMALL, align="center"):
+                 padx=14, bg=None, font=F_SMALL, align="center", icon=None,
+                 icon_size=16, tooltip=None):
         self.bgcol = bg or _parent_bg(master)
+        self.icon, self.icon_size = icon, icon_size
         self.font = font
         self.align = align
         self.kind = kind
@@ -335,6 +390,8 @@ class Pill(tk.Canvas):
         self.bind("<FocusOut>", lambda e: self._set_focus(False))
         if self.align == "left":
             self.bind("<Configure>", lambda e: self._paint())
+        if tooltip or (icon and not text):
+            Tooltip(self, tooltip or "")
 
     # -- 内部 --
     def _measure(self, s):
@@ -369,12 +426,31 @@ class Pill(tk.Canvas):
         if self._focused:
             round_rect(self, 2, 2, w - 2, self.h - 2, min(8, self.h / 2 - 2),
                        outline=C.A600, width=1)
-        self.create_text(self.padx if self.align == "left" else w / 2, self.h / 2 + 0.5,
-                         text=self.text, anchor="w" if self.align == "left" else "center",
-                         fill=fg, font=self.font)
+        icon_w = self._icon_w()
+        x = self.padx if self.align == "left" else (w - icon_w - self._measure(self.text)) / 2
+        name = self._icon_name()
+        if name:
+            img = icons.photo(name, self.icon_size, fg, master=self)
+            self.create_image(round(x), round((self.h - self.icon_size) / 2),
+                              image=img, anchor="nw")
+            x += icon_w
+        if self.text:
+            self.create_text(x, self.h / 2 + 0.5, text=self.text, anchor="w",
+                             fill=fg, font=self.font)
+
+    def _icon_name(self):
+        # icon 可以是按文案切换的映射，例如 {"暂停采集": "pause", "继续采集": "play"}
+        if isinstance(self.icon, dict):
+            return self.icon.get(self.text)
+        return self.icon
+
+    def _icon_w(self):
+        if not self._icon_name():
+            return 0
+        return self.icon_size + (8 if self.text else 0)
 
     def _resize_to_text(self):
-        w = self._measure(self.text) + self.padx * 2
+        w = self._icon_w() + self._measure(self.text) + self.padx * 2
         self.configure(width=w)
         self._paint()
 
@@ -386,6 +462,10 @@ class Pill(tk.Canvas):
     def set_kind(self, kind):
         self.kind = kind
         self._paint()
+
+    def set_icon(self, icon):
+        self.icon = icon
+        self._resize_to_text()
 
     # -- 事件 --
     def _on_enter(self, _):
@@ -511,13 +591,13 @@ class SearchBox(tk.Frame):
         self.entry = tk.Entry(self.cv, textvariable=self.var, bd=0,
                               relief="flat", bg=C.N100, fg=C.TEXT,
                               insertbackground=C.TEXT,
-                              font=(FAMILY, 9), highlightthickness=0)
-        self._win = self.cv.create_window(28, 15, anchor="w", window=self.entry,
+                              font=F_SMALL, highlightthickness=0)
+        self._win = self.cv.create_window(30, 15, anchor="w", window=self.entry,
                                           width=width - 40, height=20)
         self.cv.bind("<Configure>", self._resize)
         # 统一线性图标，光学居中；不依赖系统字体里的搜索符号。
-        self.cv.create_oval(10, 12, 18, 20, outline=C.T3, width=1.2)
-        self.cv.create_line(17, 19, 21, 23, fill=C.T3, width=1.2, capstyle="round")
+        self.cv.create_image(9, H_PILL // 2, anchor="w",
+                             image=icons.photo("search", 15, C.T3, master=self.cv))
         self.var.trace_add("write", lambda *a: (not self._ph) and self.on_change and self.on_change())
         self._show_placeholder()
         self.entry.bind("<FocusIn>", self._on_focus_in)
@@ -573,7 +653,7 @@ class SearchBox(tk.Frame):
         ring_rect(self.cv, 0.5, 0.5, w - 0.5, H_PILL - 0.5, R_FIELD,
                   fill=fill, active=self._focus, tags="shape")
         self.cv.tag_lower("shape")
-        self.cv.coords(self._win, 28, H_PILL / 2)
+        self.cv.coords(self._win, 30, H_PILL / 2)
         self.cv.itemconfigure(self._win, width=max(20, w - 42), height=20)
 
     def _resize(self, e):

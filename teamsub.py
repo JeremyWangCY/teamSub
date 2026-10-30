@@ -930,6 +930,10 @@ class App:
         self.reader.simplify = True
 
         UK.set_theme(getattr(self.tcfg, "theme", "light"))
+        # 恢复检查要看的是「上一次」的登记。必须在采集开始前读出来：
+        # 启动后很快来的字幕会把登记改写成本次会话，延时检查就会把
+        # 正在进行的这场误报成「上次没有正常结束」。
+        self._startup_stamp = self._read_session_stamp()
         self._build_ui()
         self.reader.start()
         if self.tcfg.enabled and self._has_credentials():
@@ -1151,6 +1155,8 @@ class App:
         guard = getattr(self, "_sheet_guard", None)
         return guard is None or guard()
 
+    NAV_PAGES = ("历史会议", "设置", "帮助")
+
     def _show_sheet(self, title, builder, push=False):
         """在内容区推入一层。push=True 时保留当前层，返回时回到它。"""
         if getattr(self, "_sheet_open", False) and not self._allow_leave_sheet():
@@ -1177,11 +1183,15 @@ class App:
         for w in layer.winfo_children():
             w.destroy()
 
+        # 导航里的目的地是顶层页面，只显示标题；其余（确认、导出、记录详情…）
+        # 是从某处推进来的，带「返回」。
         top = tk.Frame(layer, bg=UK.C.N50)
-        top.pack(fill="x", padx=6, pady=(2, 10))
-        UK.Pill(top, "‹ 返回", self._close_sheet, kind="ghost", padx=10).pack(side="left")
+        top.pack(fill="x", padx=24, pady=(20, 16))
+        if self._sheet_stack or title not in self.NAV_PAGES:
+            UK.Pill(top, "返回", self._close_sheet, kind="ghost", padx=10, icon="back",
+                    tooltip="返回（Esc）").pack(side="left", padx=(0, 10))
         tk.Label(top, text=title, bg=UK.C.N50, fg=UK.C.TEXT,
-                 font=UK.F_HEAD).pack(side="left", padx=12)
+                 font=UK.F_TITLE).pack(side="left")
 
         self._sheet_footer = tk.Frame(layer, bg=UK.C.N50)
         wrap = tk.Frame(layer, bg=UK.C.N50)
@@ -1553,12 +1563,23 @@ class App:
         """历史字幕（启动前已产生的）没有可信时间，显示占位。"""
         return "--:--:--" if rec.get("backlog") or not isinstance(rec.get("ts"), datetime) else rec["ts"].strftime("%H:%M:%S")
 
+    def _empty_reason(self):
+        """空状态的原因：还没有字幕 / 有字幕但被清屏 / 被搜索或发言人筛掉。"""
+        if not self.records:
+            return "waiting"
+        search = getattr(self, "search", None)
+        if self.speaker_filter or (search is not None and search.value()):
+            return "filtered"
+        return "cleared"
+
     def show_placeholder(self):
         self.txt.configure(state="normal")
         self.txt.delete("1.0", "end")
         self.txt.configure(state="disabled")
         try:
-            self.empty_box.place(relx=0.5, rely=0.38, anchor="center")
+            import frontend_shell
+            frontend_shell.set_empty_state(self, self._empty_reason())
+            self.empty_box.place(relx=0.5, rely=0.4, anchor="center")
         except Exception:
             pass
         self.placeholder_active = True
@@ -2392,41 +2413,54 @@ class App:
         except Exception:
             pass
 
+    @staticmethod
+    def _read_session_stamp():
+        try:
+            path = session_stamp_path()
+            if path.exists():
+                return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}       # 损坏的登记：交给 _check_recovery 清理
+        return None
+
+    def _clear_previous_stamp(self, previous):
+        """只清上一次的登记；文件若已被本次会话改写，保留它。"""
+        current = self._read_session_stamp()
+        if current is None:
+            return
+        if current == previous or current == {}:
+            self._clear_session_stamp()
+
     def _check_recovery(self):
         """启动时若发现上次没收尾，把那份记录指给用户。
 
         只给入口，不自动续接：自动切到旧会议会让下一句字幕记进错误的文件，
         比让用户多点一下糟糕得多。
         """
-        try:
-            path = session_stamp_path()
-            if not path.exists():
-                return
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            self._clear_session_stamp()
+        data = getattr(self, "_startup_stamp", None)
+        self._startup_stamp = None
+        if data is None:
             return
         try:
             target = Path(data.get("path") or "")
-            if not target.exists():
-                self._clear_session_stamp()
-                return
-            age = time.time() - float(data.get("ts") or 0)
+            ts = float(data.get("ts") or 0)
         except Exception:
-            self._clear_session_stamp()
+            self._clear_previous_stamp(data)
             return
-        if age > 7 * 86400:             # 一周前的残留不再打扰
-            self._clear_session_stamp()
+        same_as_current = bool(self.save_path) and str(target) == str(self.save_path)
+        stale = time.time() - ts > 7 * 86400      # 一周前的残留不再打扰
+        if not data.get("path") or not target.exists() or same_as_current or stale:
+            self._clear_previous_stamp(data)
             return
         title = data.get("title") or target.stem
-        when = datetime.fromtimestamp(float(data.get("ts") or time.time()))
+        when = datetime.fromtimestamp(ts or time.time())
         self._confirm(
             "上次会议「%s」（%s）没有正常结束——可能是崩溃、断电或被强制结束。\n\n"
             "字幕已逐条写入磁盘，记录仍在：\n%s\n\n"
             "要现在打开这份记录吗？打开只是查看，不会切换当前的采集源。"
             % (title, when.strftime("%m-%d %H:%M"), target.name),
             lambda: self._open_file(target), "打开记录", push=False)
-        self._clear_session_stamp()
+        self._clear_previous_stamp(data)
 
     @staticmethod
     def _open_file(path):
@@ -2500,7 +2534,9 @@ class App:
                          ('删除', '移入系统回收站，可还原'), ('旧版 Markdown', '缺时间的一律记为未知')],
                 '操作': [('Ctrl+F', '搜索'), ('Ctrl+L', '清屏'), ('Escape', '返回上一层'),
                          ('点失败译文', '重试该条'), ('右键译文', '修正译法'),
-                         ('右键正文', '复制 / 全选'), ('更多菜单', '置顶、悬浮窗、导出')]}
+                         ('右键正文', '复制 / 全选'), ('更多菜单', '置顶、悬浮窗、导出')],
+                '导航': [('Ctrl+1', '实时会议'), ('Ctrl+2', '历史会议'), ('Ctrl+,', '设置'),
+                         ('F1', '帮助'), ('悬停按钮', '显示用途与快捷键')]}
             buttons = []
             holder = {}
 
@@ -2534,7 +2570,10 @@ class App:
 
     def _sync_nav(self, title='实时会议'):
         target = '历史会议' if title in ('历史会议', '会议记录') else title
-        for label, btn in getattr(self, 'nav_buttons', {}).items():
+        buttons = getattr(self, 'nav_buttons', {})
+        if target not in buttons:
+            return      # 确认、导出等临时页面不改变当前所在位置
+        for label, btn in buttons.items():
             btn.set_kind('selected' if target in label else 'ghost')
 
     def show_live(self):

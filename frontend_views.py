@@ -193,7 +193,8 @@ def rename_meeting(app, session, saved):
 def open_history(app):
     from teamsub import CAPTION_DIR
     state = {'all': [], 'visible': [], 'query': '', 'selected': set(),
-             'scroll': 0.0, 'loaded': False, 'errors': []}
+             'scroll': 0.0, 'loaded': False, 'errors': [],
+             'note': ''}      # 一次性提示（删除结果等），刷新列表后会再显示一遍
     def build(parent):
         b = card(parent)
 
@@ -230,16 +231,36 @@ def open_history(app):
                 text = f'{count} 场' + (f' · 已选择 {selected_count} 场' if selected_count else ' · Ctrl 多选')
             if state['errors']:
                 text += f' · {len(state["errors"])} 个文件无法读取，可尝试刷新'
+            # 删除结果必须活过一次刷新：删完总要重读列表，先写 status 再刷新
+            # 会被 update_status 覆盖掉，用户看不到「删了几个」，只剩一句
+            # 「N 场」——分不清是删成功了还是列表压根没变。
+            if state['note']:
+                text = state['note'] + '　' + text
             status.configure(text=text)
+
+        def row_text(session):
+            """列表一行：开始时间 · 标题 · 条数 · 时长 · 文件尾号。
+
+            标题是自动取的会议名（飞书会议常常全叫「飞书会议」），所以真正
+            能区分两场的是**开始时间**和文件尾号：前者给人看，后者对得上磁
+            盘上的文件。时长让用户一眼认出是不是自己要删的那场。
+            """
+            text = session.summary()
+            if session.path.suffix.lower() == '.sqlite3':
+                text += f'  ·  {session.path.stem[-12:]}'
+            return text
 
         def filter_list():
             query = search.value().casefold()
             state['query'] = search.value()
-            state['visible'] = [s for s in state['all'] if query in (s.title+s.started+s.path.name).casefold()]
+            # 搜索词同时匹配显示用的时间：用户是照着列表上看到的日期去搜的。
+            state['visible'] = [s for s in state['all']
+                                if query in (s.title + s.started + s.path.name
+                                             + s.started_label + s.duration_label).casefold()]
             state['selected'].intersection_update(str(s.path) for s in state['visible'])
             listing.delete(0,'end')
             for i, s in enumerate(state['visible']):
-                listing.insert('end', f'{s.started}  ·  {s.title}  ·  {s.count} 条  ·  {s.path.stem[-12:]}'+('  [旧版]' if s.legacy else ''))
+                listing.insert('end', row_text(s))
                 if str(s.path) in state['selected']:
                     listing.selection_set(i)
             listing.yview_moveto(state['scroll'])
@@ -250,6 +271,10 @@ def open_history(app):
             filter_list()
         UK.Pill(search_row, '清除搜索', clear_search, kind='ghost', bg=UK.C.N0).pack(side='left', padx=8)
         def on_selection(_event):
+            # 用户一动选择，上一次的删除结果就不再是当前语境，撤掉。
+            # （程序里 selection_set 不会触发 <<ListboxSelect>>，所以刷新列表
+            # 不会误清刚写下的提示。）
+            state['note'] = ''
             state['selected'] = {str(state['visible'][i].path) for i in listing.curselection()}
             update_status()
         listing.bind('<<ListboxSelect>>', on_selection)
@@ -305,8 +330,34 @@ def open_history(app):
                     else:
                         view_history(app, sessions[0], records)
                 app.background(lambda: MR.merge_sessions(paths), done)
+        def same_file(path, other):
+            return MT.job_key(path) == MT.job_key(other)
+
+        def is_recording(session):
+            path = getattr(app, 'save_path', None)
+            return bool(path) and (same_file(path, session.path)
+                                   or same_file(path.with_suffix('.sqlite3'), session.path))
+
+        def confirm_text(sessions):
+            """确认框正文：逐场写清时间，让用户在按下删除前还有机会认出选错。
+
+            以前这里只有标题——而自动命名的会议全叫「飞书会议」，几场同名的会
+            议在框里长得一模一样，等于没给用户任何核对依据。
+            """
+            lines = []
+            for s in sessions[:5]:
+                lines.append('· ' + s.summary())
+            if len(sessions) > 5:
+                lines.append(f'· 另外还有 {len(sessions) - 5} 场')
+            body = '\n'.join(lines)
+            live = [s for s in sessions if is_recording(s)]
+            if live:
+                body += ('\n\n正在记录的这一场会先停止采集并保存，再移入回收站；'
+                         '之后新的字幕会记到一场新会议里。')
+            body += '\n\n记录会移入系统回收站，可以在资源管理器里还原。'
+            return body
+
         def do_delete():
-            """删除所选会议：移入回收站可还原；正在记录的这场会被拒绝。"""
             sessions = selected()
             if not sessions:
                 status.configure(text='请先选择要删除的会议记录。')
@@ -314,19 +365,25 @@ def open_history(app):
             if any(MT.active_job(app, s.path) for s in sessions):
                 status.configure(text='所选会议正在补译，请先在会议记录里取消补译。')
                 return
-            names = '、'.join(s.title for s in sessions[:3])
-            if len(sessions) > 3:
-                names += f' 等 {len(sessions)} 场'
             # 用系统确认框而不是 _confirm()：后者会推一层界面，删完还要弹回来，
             # 而且它的回调是异步的，容易在列表已重建的情况下操作旧控件。
             if not messagebox.askyesno(
-                    '删除会议记录',
-                    f'删除「{names}」？\n\n'
-                    '记录会移入系统回收站，可以在资源管理器里还原。',
+                    f'删除会议记录（{len(sessions)} 场）',
+                    confirm_text(sessions),
                     parent=app.root, default='no'):
                 return
             paths = [s.path for s in sessions]
-            active = app.save_path
+            if any(is_recording(s) for s in sessions):
+                # 脱离当前会话要走界面线程：它会重建界面、改保存状态标签，
+                # 从工作线程调 Tk 会抛 TclError，删除反而不执行。
+                # 顺序也必须是「先脱离、再删文件」，反过来就是写线程还开着
+                # 却去删它正在写的库。
+                try:
+                    app.detach_session()
+                except Exception as exc:
+                    status.configure(text='删除未完成：' + str(exc)[:300])
+                    return
+            active = getattr(app, 'save_path', None)
 
             def work():
                 return MR.delete_sessions(paths, active_path=active)
@@ -334,15 +391,22 @@ def open_history(app):
             def done(value):
                 if not b.winfo_exists():
                     return
-                removed, refused = value
-                if refused:
-                    status.configure(text='部分未删除：' + '；'.join(refused)[:300])
-                elif removed:
-                    status.configure(text=f'已移入回收站 {len(removed)} 个文件')
+                refused = value.refused
+                if refused and not value.removed:
+                    state['note'] = '未删除：' + '；'.join(refused)[:300]
+                elif refused:
+                    state['note'] = (f'已移入回收站 {len(value.removed)} 个文件；'
+                                     '未删除：' + '；'.join(refused)[:240])
+                else:
+                    state['note'] = f'已移入回收站 {len(value.removed)} 个文件'
                 refresh()          # 无论成败都重读列表，界面反映真实磁盘状态
 
+            def failed(exc):
+                state['note'] = '删除未完成：' + str(exc)[:300]
+                refresh()
+
             status.configure(text='正在删除…')
-            app.background(work, done)
+            app.background(work, done, failed)
 
         app._sheet_footer.pack(side='bottom',fill='x',padx=24,pady=(8,12))
         row = tk.Frame(app._sheet_footer,bg=UK.C.N50)

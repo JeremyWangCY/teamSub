@@ -25,7 +25,7 @@ Windows 桌面实时字幕阅读与中英互译工具。
 
 ## 安装与启动
 
-需要 Windows 10/11（x64）。普通用户可从 [GitHub Releases](https://github.com/JeremyWangCY/teamsSub/releases/latest) 下载 `TeamSub-Setup-版本号.exe`，无需 Python 或管理员权限。安装程序提供开始菜单入口和可选桌面快捷方式。
+需要 Windows 10/11（x64）。普通用户可从 [GitHub Releases](https://github.com/JeremyWangCY/teamSub/releases/latest) 下载 `TeamSub-Setup-版本号.exe`，无需 Python 或管理员权限。安装程序提供开始菜单入口和可选桌面快捷方式。
 
 默认安装目录为 `%USERPROFILE%\Apps\TeamSub`。已有自动更新功能的版本可在设置 → 更新中下载并更新；旧版首次升级需要从系统托盘退出后覆盖安装。配置和会议记录会保留，卸载不会主动删除用户数据。便携版 ZIP 解压到固定可写目录后启动 `TeamSub.exe`。兼容性实测范围见 [兼容性说明](docs/COMPATIBILITY.md)。
 

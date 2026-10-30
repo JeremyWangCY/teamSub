@@ -14,7 +14,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-REPOSITORY = "JeremyWangCY/teamsSub"
+REPOSITORY = "JeremyWangCY/teamSub"
 RELEASES_URL = f"https://github.com/{REPOSITORY}/releases"
 LATEST_API_URL = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"
 MAX_RESPONSE_BYTES = 1024 * 1024

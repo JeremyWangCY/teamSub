@@ -85,7 +85,7 @@ RESOURCE_DIR = _resource_dir()  # 只读资源（随 exe 打包）
 # 常量放在模块顶层（而不是 pyproject/打包元数据里），是为了让源码运行、
 # 冻结成 exe 两种方式读到的都是同一个值。
 APP_DISPLAY_NAME = "TeamsSub"
-APP_VERSION = "0.1.14"
+APP_VERSION = "0.1.15"
 
 CAPTION_DIR = Path(os.environ.get("TEAMSSUB_DATA_DIR", APP_DIR)) / "captions"
 
@@ -2574,6 +2574,34 @@ class App:
             else:
                 action()
         self.root.after(1, drained)
+
+    def detach_session(self):
+        """把「正在记录的这场」交出去：停写线程、清空内存会话，文件留给调用方删除。
+
+        删除历史记录时如果选中了当前正在录的这场，老代码会直接拒绝（「正在记录
+        中，不能删除」）。可用户看到的只是几个「飞书会议」重名的列表，分不清哪
+        场是哪一场，于是反复点删除、每次都被顶回来，最后认定功能坏了。
+
+        正确做法不是永远拦住，而是**先安全地脱离，再删文件**：
+        落盘 → 关写线程 → 清空会话状态。三步都做完之后再动文件，就不会出现
+        「写线程还持有句柄，删到一半数据库没了」的半场记录。
+
+        返回后原来的路径也不能再被 autosave 写回：_do_clear 已经把
+        save_store / save_path 置空，下一句字幕会开一份新的会议记录。
+        """
+        store = self.save_store
+        if store is None:
+            self._do_clear()
+            return
+        # 先把队列里没写完的字幕落盘，否则杀线程就等于丢最后几句。
+        try:
+            if hasattr(store, 'flush'):
+                store.flush()
+        except Exception as exc:
+            # 落盘失败就不动文件：宁可让用户看到「这场删不掉」，
+            # 也不能把还没保存的内容连同文件一起送进回收站。
+            raise RuntimeError(f'当前会议仍有内容未能保存，已保留：{exc}')
+        self._do_clear()           # 内部会 close 掉 save_store 并清空会话
 
     def new_meeting(self):
         def start():

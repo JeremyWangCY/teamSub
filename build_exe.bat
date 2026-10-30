@@ -1,5 +1,5 @@
 @echo off
-rem Build a single-file TeamsSub.exe (no console window).
+rem Build a single-file TeamSub.exe (no console window).
 rem Requires: .venv with requirements.txt + requirements-dev.txt installed.
 cd /d "%~dp0"
 
@@ -19,7 +19,7 @@ if errorlevel 1 (
 )
 
 ".venv\Scripts\python.exe" -m PyInstaller --noconfirm --clean --onefile --windowed ^
-    --name TeamsSub ^
+    --name TeamSub ^
     --icon teamsub.ico ^
     --version-file version_info.txt ^
     --add-data "teamsub.ico;." ^
@@ -37,8 +37,8 @@ if errorlevel 1 (
 )
 
 echo.
-echo Done: dist\TeamsSub.exe
-for /f %%H in ('certutil -hashfile dist\TeamsSub.exe SHA256 ^| findstr /v ":"') do (
+echo Done: dist\TeamSub.exe
+for /f %%H in ('certutil -hashfile dist\TeamSub.exe SHA256 ^| findstr /v ":"') do (
     echo SHA256: %%H
     goto :done
 )

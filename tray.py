@@ -41,9 +41,9 @@ class TrayIcon:
 
     #: 隐藏窗口的类名。每个实例一个——RegisterClass 对同名类会抛「类已存在」，
     #: 而「取消退出 → 重新挂图标」这条路要求同一个对象能再来一轮。
-    _CLASS_PREFIX = "TeamsSubTrayWindow"
+    _CLASS_PREFIX = "TeamSubTrayWindow"
 
-    def __init__(self, icon_path, tip="TeamsSub", on_error=None):
+    def __init__(self, icon_path, tip="TeamSub", on_error=None):
         self.icon_path = str(icon_path)
         self.tip = tip
         self.on_error = on_error      # 托盘侧错误回调（主程序接日志）
@@ -129,9 +129,12 @@ class TrayIcon:
                 win32gui.ShowWindow(self._hwnd, win32con.SW_SHOWNOACTIVATE)
             except Exception:
                 pass
+            # 托盘用小图标尺寸（SM_CXSMICON，随 DPI 变化）。LR_DEFAULTSIZE 取的是
+            # 32px 大图标，再被系统缩到 16px，托盘里会发糊。
+            small = win32api.GetSystemMetrics(win32con.SM_CXSMICON) or 16
             self._icon = win32gui.LoadImage(
-                0, self.icon_path, win32con.IMAGE_ICON, 0, 0,
-                win32con.LR_LOADFROMFILE | win32con.LR_DEFAULTSIZE)
+                0, self.icon_path, win32con.IMAGE_ICON, small, small,
+                win32con.LR_LOADFROMFILE)
             self._ok = bool(self._add())
         except Exception:
             self._ok = False
@@ -288,7 +291,7 @@ class TrayIcon:
 
     def set_tip(self, text):
         """鼠标悬停滞留文本（会议状态、连接情况）。"""
-        self.tip = (text or "TeamsSub")[:120]
+        self.tip = (text or "TeamSub")[:120]
         if not self._hwnd:
             return
         try:
@@ -428,7 +431,7 @@ class TrayIcon:
                                 "显示 / 隐藏悬浮字幕")
             win32gui.AppendMenu(menu, win32con.MF_SEPARATOR, 0, "")
             win32gui.AppendMenu(menu, win32con.MF_STRING, _MENU_QUIT,
-                                "退出 TeamsSub")
+                                "退出 TeamSub")
             x, y = win32gui.GetCursorPos()
             # TrackPopupMenu 有一条很老的约定：菜单弹出前，拥有它的窗口必须是
             # **前台窗口**，否则它会立刻返回、什么也不画 —— 用户看到的就是

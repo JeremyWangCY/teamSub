@@ -4,11 +4,11 @@
 
 ## 支持目标与安装方式
 
-发行包以 Windows 10 / Windows 11 x64 为支持目标。安装器配置为 `MinVersion=10.0`、`ArchitecturesAllowed=x64compatible`、`PrivilegesRequired=lowest`，默认安装在当前用户的 `Apps\TeamsSub` 目录。冻结包包含 Python、Tk、UI Automation、pywin32 和 Pillow，使用者无需另外安装 Python 或运行依赖。
+发行包以 Windows 10 / Windows 11 x64 为支持目标。安装器配置为 `MinVersion=10.0`、`ArchitecturesAllowed=x64compatible`、`PrivilegesRequired=lowest`，默认安装在当前用户的 `Apps\TeamSub` 目录。冻结包包含 Python、Tk、UI Automation、pywin32 和 Pillow，使用者无需另外安装 Python 或运行依赖。
 
 Windows 11 ARM64 的 x64 模拟执行尚未验证，不能据安装器允许 `x64compatible` 就声称已支持 ARM64；未提供原生 ARM64 包。Windows x86、Windows 10 ARM64、Windows 7/8 不在本次发行验证范围内。
 
-配置、缓存和会议记录默认保存在程序目录，可通过 `TEAMSSUB_DATA_DIR` 指定另一可写目录。默认按用户安装目录可避免一般的 `Program Files` 写入限制；便携包放入只读目录、企业受控目录或其他账户无写入权的目录时，需要先安排可写的数据目录。自检成功只证明自建临时目录可写，不代表任意安装目录可写。
+配置、缓存和会议记录默认保存在程序目录，可通过 `TEAMSUB_DATA_DIR` 指定另一可写目录。默认按用户安装目录可避免一般的 `Program Files` 写入限制；便携包放入只读目录、企业受控目录或其他账户无写入权的目录时，需要先安排可写的数据目录。自检成功只证明自建临时目录可写，不代表任意安装目录可写。
 
 ## 本机实际验证矩阵
 
@@ -50,7 +50,7 @@ Windows 11 ARM64 的 x64 模拟执行尚未验证，不能据安装器允许 `x6
 发行程序支持在启动 UI、单实例锁、配置加载之前运行：
 
 ```powershell
-& '.\TeamsSub.exe' --self-test "$PWD\runtime-report.json"
+& '.\TeamSub.exe' --self-test "$PWD\runtime-report.json"
 ```
 
 报告路径必须是绝对路径，父目录必须已存在且可写。成功返回进程退出码 0；检查失败或无法写出报告时返回非零值。开发环境可调用 `runtime_diagnostics.run_self_test(absolute_report_path)`，返回 `bool`。

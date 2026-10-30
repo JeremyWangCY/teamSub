@@ -1,7 +1,7 @@
 import copy
 import threading
 import tkinter as tk
-from tkinter import messagebox, simpledialog
+from tkinter import messagebox
 import ui_kit as UK
 from translator import (all_topics, TOPICS, TranslationService,
                         REASONING_LABELS, REASONING_TITLES)
@@ -140,7 +140,7 @@ def open_settings(self, page="服务"):
             if len(profiles) >= 8:
                 messagebox.showinfo('新建引擎配置', '最多保存 8 个配置，请先删除不需要的配置。', parent=self.root)
                 return
-            name = simpledialog.askstring('新建引擎配置', '输入配置名称：', parent=self.root)
+            name = UK.ask_string(self.root, '新建引擎配置')
             if name is None:
                 return
             name = name.strip()
@@ -164,8 +164,7 @@ def open_settings(self, page="服务"):
 
         def rename_profile():
             old = active_profile['name']
-            name = simpledialog.askstring('重命名引擎配置', '输入新名称：',
-                                          initialvalue=old, parent=self.root)
+            name = UK.ask_string(self.root, '重命名引擎配置', initial=old)
             if name is None:
                 return
             name = name.strip()
@@ -217,9 +216,7 @@ def open_settings(self, page="服务"):
         t_brief.grid(row=0,column=0,sticky='nsew')
         terms_header=tk.Frame(edits,bg=W)
         terms_header.grid(row=1,column=0,sticky='we',pady=(6,2))
-        lab(terms_header,'译名对照').pack(side='left')
-        tk.Label(terms_header,text='每行 原文=译文 · 适用于 OpenAI 兼容引擎',
-                 bg=W,fg=UK.C.T3,font=UK.F_MINI).pack(side='right')
+        lab(terms_header,'译名对照  原文=译文').pack(side='left')
         t_gloss=UK.RoundedText(edits,lines=2,bg=W)
         t_gloss.grid(row=2,column=0,sticky='nsew')
 
@@ -275,7 +272,7 @@ def open_settings(self, page="服务"):
         import update_workflow as UW
         from teamsub import APP_VERSION
         update_page=pages[page_titles.index('更新')]
-        tk.Label(update_page,text=f'TeamsSub {APP_VERSION}',bg=W,fg=UK.C.TEXT,
+        tk.Label(update_page,text=f'TeamSub {APP_VERSION}',bg=W,fg=UK.C.TEXT,
                  font=UK.F_HEAD).pack(anchor='w',pady=(0,20))
         state_update=UW.state_for(self)
         update_status=lab(update_page,'尚未检查')
@@ -345,7 +342,7 @@ def open_settings(self, page="服务"):
                 text=(f'下载中 {received*100//total}% · {received/1048576:.1f} / {total/1048576:.1f} MB'
                       if phase=='downloading' else '正在取消…')
                 update_bar.pack(fill='x',before=update_actions,pady=(0,16))
-                width=max(20,update_page.winfo_width())
+                width=max(20,UK.lpx(update_page.winfo_width()))
                 update_bar.delete('all')
                 UK.round_rect(update_bar,0,0,width-1,7,4,fill=UK.C.N100)
                 if received:
@@ -396,7 +393,7 @@ def open_settings(self, page="服务"):
         def refresh_topic_state():
             current=state['key'] == self.tcfg.topic and state['key'] in topics
             lbl_topic_state.configure(
-                text='当前主题 · 修改后保存生效' if current else '待切换 · 保存后生效',
+                text='' if current else '待切换',
                 fg=UK.C.SUB if current else UK.C.A600)
 
         def load_fields(key):

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-ui_kit —— TeamsSub 的视觉层组件
+ui_kit —— TeamSub 的视觉层组件
 ===============================
 设计取向：暖灰底色、圆角与低饱和蓝色；按钮仅用蓝、灰、柔红三类。
 
@@ -10,6 +10,7 @@ tkinter 原生没有圆角，这里用 Canvas 画形状、再用 window item 承
 import tkinter as tk
 import tkinter.font as tkfont
 from PIL import Image, ImageDraw, ImageTk
+import icons
 import math
 import re
 
@@ -132,6 +133,216 @@ F_NAME  = (FAMILY, 10, "bold")
 F_BODY  = (FAMILY, 12)
 F_TIME  = ("Consolas", 9)
 
+# ------------------------------------------------------------------ DPI 缩放
+# 界面代码一律写「逻辑像素」（100% 缩放下的像素）。进程声明 DPI 感知后，
+# Tk 拿到的是物理像素：字体按磅值自动放大，其余写死的像素不会。这里在
+# Tk 这一层统一换算一次，业务代码不用到处乘系数：
+#   · pack/grid/place 的边距与位置、Frame/Toplevel 宽高、wraplength、
+#     Text 的行距与缩进 —— 传入时乘 S；
+#   · Canvas 整体工作在逻辑坐标：画图、coords、事件坐标、winfo 尺寸都换算；
+#   · 字体的 measure/metrics 返回逻辑像素，和上面两类数值同一把尺子；
+#   · PIL 位图（圆角、图标）按物理尺寸渲染，保证清晰。
+# S == 1 时什么都不装，行为与旧版完全一致。
+S = 1.0
+
+
+def px(v):
+    """逻辑像素 → 物理像素（整数），用于窗口几何等只认整数的场合。"""
+    return int(round(v * S))
+
+
+def lpx(v):
+    """物理像素（winfo_* 读出来的）→ 逻辑像素。"""
+    return v / S
+
+
+def _sc(v):
+    """把一个像素量乘 S；元组（如 padx=(0, 8)）逐项处理，非数字原样返回。"""
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return v * S
+    if isinstance(v, (tuple, list)):
+        return type(v)(_sc(i) for i in v)
+    if isinstance(v, str):
+        parts = v.split()
+        try:
+            return " ".join(str(float(p) * S) for p in parts)
+        except ValueError:
+            return v
+    return v
+
+
+_GEOM_KEYS = {"padx", "pady", "ipadx", "ipady"}
+_PLACE_KEYS = {"x", "y", "width", "height"}
+_SIZE_WIDGETS = {"frame", "toplevel", "labelframe", "canvas"}
+_WIDGET_KEYS = {"wraplength", "padx", "pady", "spacing1", "spacing2", "spacing3"}
+_CANVAS_KEYS = {"scrollregion", "xscrollincrement", "yscrollincrement"}
+_TAG_KEYS = {"spacing1", "spacing2", "spacing3", "lmargin1", "lmargin2", "rmargin", "offset"}
+_ITEM_KEYS = {"width", "height", "activewidth", "disabledwidth"}
+
+
+def _scaled(opts, keys):
+    if not opts:
+        return opts
+    return {k: (_sc(v) if k.rstrip("_") in keys else v) for k, v in opts.items()}
+
+
+def _widget_keys(widget):
+    keys = set(_WIDGET_KEYS)
+    name = getattr(widget, "widgetName", "")
+    if name in _SIZE_WIDGETS:
+        keys |= {"width", "height"}
+    if name == "canvas":
+        keys |= _CANVAS_KEYS
+    return keys
+
+
+def install_scale(scale: float):
+    """按缩放系数挂上换算层；只能在建任何控件之前调用一次。"""
+    global S
+    scale = round(float(scale), 3)
+    if scale <= 0 or abs(scale - 1.0) < 0.01 or S != 1.0:
+        return
+    S = scale
+    Misc, Canvas = tk.Misc, tk.Canvas
+
+    def wrap_geom(orig, keys):
+        def f(self, cnf={}, **kw):
+            if isinstance(cnf, dict) and cnf:
+                kw = {**cnf, **kw}
+                cnf = {}
+            return orig(self, cnf, **_scaled(kw, keys))
+        return f
+
+    for cls, names, keys in ((tk.Pack, ("pack", "pack_configure"), _GEOM_KEYS),
+                             (tk.Grid, ("grid", "grid_configure"), _GEOM_KEYS),
+                             (tk.Place, ("place", "place_configure"), _GEOM_KEYS | _PLACE_KEYS)):
+        orig = getattr(cls, names[1])
+        for n in names:
+            setattr(cls, n, wrap_geom(orig, keys))
+
+    orig_grid_conf = Misc._grid_configure
+
+    def grid_conf(self, command, index, cnf, kw):
+        if isinstance(cnf, dict):
+            cnf = _scaled(cnf, {"minsize", "pad"})
+        return orig_grid_conf(self, command, index, cnf, _scaled(kw, {"minsize", "pad"}))
+    Misc._grid_configure = grid_conf
+
+    orig_init = tk.BaseWidget.__init__
+
+    def base_init(self, master, widgetName, cnf={}, kw={}, extra=()):
+        self.widgetName = widgetName
+        keys = _widget_keys(self)
+        return orig_init(self, master, widgetName, _scaled(dict(cnf), keys),
+                         _scaled(dict(kw), keys), extra)
+    tk.BaseWidget.__init__ = base_init
+
+    orig_configure = Misc._configure
+
+    def configure(self, cmd, cnf, kw):
+        if isinstance(cnf, str) or (not cnf and not kw):
+            return orig_configure(self, cmd, cnf, kw)
+        if cmd == "configure":
+            keys = _widget_keys(self)
+        elif isinstance(cmd, tuple) and cmd[0] == "itemconfigure" and isinstance(self, Canvas):
+            keys = _ITEM_KEYS
+        elif isinstance(cmd, tuple) and cmd[:2] == ("tag", "configure"):
+            keys = _TAG_KEYS
+        else:
+            return orig_configure(self, cmd, cnf, kw)
+        cnf = _scaled(dict(cnf), keys) if isinstance(cnf, dict) else cnf
+        return orig_configure(self, cmd, cnf, _scaled(kw, keys))
+    Misc._configure = configure
+
+    orig_cget = Misc.cget
+
+    def cget(self, key):
+        value = orig_cget(self, key)
+        if isinstance(self, Canvas) and key in ("width", "height"):
+            return float(value) / S
+        return value
+    Misc.cget = Misc.__getitem__ = cget
+
+    # ---- Canvas：逻辑坐标 ----
+    def flat_scale(args):
+        return tuple(a * S if isinstance(a, (int, float)) and not isinstance(a, bool) else a
+                     for a in tk._flatten(args))
+
+    orig_create = Canvas._create
+
+    def create(self, itemType, args, kw):
+        args = tk._flatten(args)
+        cnf = {}
+        if args and isinstance(args[-1], dict):
+            args, cnf = args[:-1], args[-1]
+        return orig_create(self, itemType, flat_scale(args),
+                           _scaled({**cnf, **kw}, _ITEM_KEYS))
+    Canvas._create = create
+
+    orig_coords = Canvas.coords
+
+    def coords(self, *args):
+        if len(args) > 1:
+            args = (args[0],) + flat_scale(args[1:])
+        return [c / S for c in orig_coords(self, *args)]
+    Canvas.coords = coords
+
+    orig_move, orig_moveto = Canvas.move, Canvas.moveto
+    Canvas.move = lambda self, *a: orig_move(self, *(a[:1] + flat_scale(a[1:])))
+    Canvas.moveto = lambda self, tag, x="", y="": orig_moveto(
+        self, tag, _sc(x) if x != "" else x, _sc(y) if y != "" else y)
+
+    orig_bbox = Canvas.bbox
+
+    def bbox(self, *args):
+        box = orig_bbox(self, *args)
+        return tuple(v / S for v in box) if box else box
+    Canvas.bbox = bbox
+
+    for name in ("canvasx", "canvasy"):
+        def conv(self, screen, gridspacing=None, _orig=getattr(Canvas, name)):
+            return _orig(self, screen * S, gridspacing) / S
+        setattr(Canvas, name, conv)
+
+    for name in ("find_overlapping", "find_enclosed", "find_closest"):
+        def find(self, *a, _orig=getattr(Canvas, name)):
+            return _orig(self, *flat_scale(a))
+        setattr(Canvas, name, find)
+
+    for name in ("winfo_width", "winfo_height", "winfo_reqwidth", "winfo_reqheight"):
+        def size(self, _orig=getattr(Misc, name)):
+            return _orig(self) / S
+        setattr(Canvas, name, size)
+
+    orig_sub = Misc._substitute
+
+    def substitute(self, *args):
+        res = orig_sub(self, *args)
+        e = res[0] if isinstance(res, tuple) and res else None
+        if isinstance(e, tk.Event):
+            for attr in ("x", "y", "width", "height"):
+                v = getattr(e, attr, None)
+                if isinstance(v, int):
+                    setattr(e, attr, v / S)
+        return res
+    Canvas._substitute = substitute
+
+    # ---- 字体量尺：逻辑像素 ----
+    orig_measure, orig_metrics = tkfont.Font.measure, tkfont.Font.metrics
+
+    def measure(self, text, displayof=None):
+        return round(orig_measure(self, text, displayof) / S)
+
+    def metrics(self, *options, **kw):
+        res = orig_metrics(self, *options, **kw)
+        if isinstance(res, dict):
+            return {k: (round(v / S) if k != "fixed" else v) for k, v in res.items()}
+        return res if options and options[0] == "fixed" else round(res / S)
+    tkfont.Font.measure, tkfont.Font.metrics = measure, metrics
+
+
 # 形状标尺
 R_CARD  = 16     # 大卡（主内容、设置、确认）
 R_POP   = 12     # 弹层
@@ -226,21 +437,25 @@ def _parent_bg(w) -> str:
 
 def round_rect(cv: tk.Canvas, x1, y1, x2, y2, r, **kw):
     """Antialiased rounded geometry, with references scoped to the owning canvas."""
+    # 入参是逻辑坐标；位图按物理像素画，高缩放下边缘依旧锐利
     scale = 3
+    # 未布局的画布只有 1px（缩放后不足 1 个逻辑像素），收成零尺寸而不是倒置
+    x2, y2 = max(x1, x2), max(y1, y2)
+    x1, y1, x2, y2, r = x1 * S, y1 * S, x2 * S, y2 * S, r * S
     left, top = math.floor(x1), math.floor(y1)
     width, height = max(1, math.ceil(x2)-left+1), max(1, math.ceil(y2)-top+1)
     shape = Image.new('RGBA', (width*scale, height*scale))
     draw = ImageDraw.Draw(shape)
     box = ((x1-left)*scale, (y1-top)*scale, (x2-left)*scale, (y2-top)*scale)
     fill, outline = kw.pop('fill', None), kw.pop('outline', None)
-    line_width = max(1, round(kw.pop('width', 1)*scale))
+    line_width = max(1, round(kw.pop('width', 1)*S*scale))
     draw.rounded_rectangle(box, radius=max(0,r)*scale, fill=fill or None, outline=outline or None, width=line_width)
     photo = ImageTk.PhotoImage(shape.resize((width,height), Image.Resampling.LANCZOS), master=cv)
     refs = getattr(cv, '_round_images', {})
     for item in list(refs):
         if not cv.type(item):
             del refs[item]
-    item = cv.create_image(left, top, image=photo, anchor='nw', **kw)
+    item = cv.create_image(left / S, top / S, image=photo, anchor='nw', **kw)
     refs[item] = photo
     cv._round_images = refs
     return item
@@ -292,7 +507,7 @@ class Card(tk.Frame):
         只在"分配尺寸变化"时触发，内容增长不触发，所以必须显式算一次。
         """
         self.update_idletasks()
-        h = self.body.winfo_reqheight() + 2 * self.pad
+        h = lpx(self.body.winfo_reqheight()) + 2 * self.pad
         self.cv.configure(height=h)
 
     def _resize(self, e):
@@ -305,13 +520,69 @@ class Card(tk.Frame):
         self.cv.tag_lower("bgshape")
 
 
+# ------------------------------------------------------------------ 悬停提示
+class Tooltip:
+    """延时出现的小提示；纯图标按钮靠它说明用途。text 可为可调用对象（取实时文案）。"""
+
+    DELAY = 450
+
+    def __init__(self, widget, text):
+        self.widget, self.text = widget, text
+        self._after = None
+        self._win = None
+        widget.bind("<Enter>", self._queue, add="+")
+        for ev in ("<Leave>", "<ButtonPress>", "<Destroy>"):
+            widget.bind(ev, self._hide, add="+")
+
+    def _queue(self, _=None):
+        self._hide()
+        self._after = self.widget.after(self.DELAY, self._show)
+
+    def _show(self):
+        self._after = None
+        text = self.text() if callable(self.text) else self.text
+        if not text or not self.widget.winfo_exists():
+            return
+        win = self._win = tk.Toplevel(self.widget)
+        win.overrideredirect(True)
+        try:
+            win.attributes("-topmost", True)
+        except tk.TclError:
+            pass
+        tk.Label(win, text=text, bg=C.TEXT, fg=C.N0, font=F_MINI,
+                 padx=8, pady=4, justify="left").pack()
+        win.update_idletasks()
+        # 屏幕定位全用物理像素（Canvas 的 winfo_width 已换成逻辑值，这里绕开）
+        ww, wh = tk.Misc.winfo_width(self.widget), tk.Misc.winfo_height(self.widget)
+        x = self.widget.winfo_rootx() + (ww - win.winfo_reqwidth()) // 2
+        y = self.widget.winfo_rooty() + wh + px(6)
+        x = max(0, min(x, self.widget.winfo_screenwidth() - win.winfo_reqwidth()))
+        win.geometry(f"+{x}+{y}")
+
+    def _hide(self, _=None):
+        if self._after is not None:
+            try:
+                self.widget.after_cancel(self._after)
+            except tk.TclError:
+                pass
+            self._after = None
+        if self._win is not None:
+            try:
+                self._win.destroy()
+            except tk.TclError:
+                pass
+            self._win = None
+
+
 # ------------------------------------------------------------------ 胶囊按钮
 class Pill(tk.Canvas):
     """圆角按钮；蓝色强调、灰色常规、柔红色谨慎操作。"""
 
     def __init__(self, master, text, command=None, kind="ghost", height=H_PILL,
-                 padx=14, bg=None, font=F_SMALL, align="center"):
+                 padx=14, bg=None, font=F_SMALL, align="center", icon=None,
+                 icon_size=16, tooltip=None):
         self.bgcol = bg or _parent_bg(master)
+        self.icon, self.icon_size = icon, icon_size
         self.font = font
         self.align = align
         self.kind = kind
@@ -335,6 +606,8 @@ class Pill(tk.Canvas):
         self.bind("<FocusOut>", lambda e: self._set_focus(False))
         if self.align == "left":
             self.bind("<Configure>", lambda e: self._paint())
+        if tooltip or (icon and not text):
+            Tooltip(self, tooltip or "")
 
     # -- 内部 --
     def _measure(self, s):
@@ -369,12 +642,31 @@ class Pill(tk.Canvas):
         if self._focused:
             round_rect(self, 2, 2, w - 2, self.h - 2, min(8, self.h / 2 - 2),
                        outline=C.A600, width=1)
-        self.create_text(self.padx if self.align == "left" else w / 2, self.h / 2 + 0.5,
-                         text=self.text, anchor="w" if self.align == "left" else "center",
-                         fill=fg, font=self.font)
+        icon_w = self._icon_w()
+        x = self.padx if self.align == "left" else (w - icon_w - self._measure(self.text)) / 2
+        name = self._icon_name()
+        if name:
+            img = icons.photo(name, self.icon_size, fg, master=self)
+            self.create_image(round(x), round((self.h - self.icon_size) / 2),
+                              image=img, anchor="nw")
+            x += icon_w
+        if self.text:
+            self.create_text(x, self.h / 2 + 0.5, text=self.text, anchor="w",
+                             fill=fg, font=self.font)
+
+    def _icon_name(self):
+        # icon 可以是按文案切换的映射，例如 {"暂停采集": "pause", "继续采集": "play"}
+        if isinstance(self.icon, dict):
+            return self.icon.get(self.text)
+        return self.icon
+
+    def _icon_w(self):
+        if not self._icon_name():
+            return 0
+        return self.icon_size + (8 if self.text else 0)
 
     def _resize_to_text(self):
-        w = self._measure(self.text) + self.padx * 2
+        w = self._icon_w() + self._measure(self.text) + self.padx * 2
         self.configure(width=w)
         self._paint()
 
@@ -386,6 +678,10 @@ class Pill(tk.Canvas):
     def set_kind(self, kind):
         self.kind = kind
         self._paint()
+
+    def set_icon(self, icon):
+        self.icon = icon
+        self._resize_to_text()
 
     # -- 事件 --
     def _on_enter(self, _):
@@ -511,13 +807,13 @@ class SearchBox(tk.Frame):
         self.entry = tk.Entry(self.cv, textvariable=self.var, bd=0,
                               relief="flat", bg=C.N100, fg=C.TEXT,
                               insertbackground=C.TEXT,
-                              font=(FAMILY, 9), highlightthickness=0)
-        self._win = self.cv.create_window(28, 15, anchor="w", window=self.entry,
+                              font=F_SMALL, highlightthickness=0)
+        self._win = self.cv.create_window(30, 15, anchor="w", window=self.entry,
                                           width=width - 40, height=20)
         self.cv.bind("<Configure>", self._resize)
         # 统一线性图标，光学居中；不依赖系统字体里的搜索符号。
-        self.cv.create_oval(10, 12, 18, 20, outline=C.T3, width=1.2)
-        self.cv.create_line(17, 19, 21, 23, fill=C.T3, width=1.2, capstyle="round")
+        self.cv.create_image(9, H_PILL // 2, anchor="w",
+                             image=icons.photo("search", 15, C.T3, master=self.cv))
         self.var.trace_add("write", lambda *a: (not self._ph) and self.on_change and self.on_change())
         self._show_placeholder()
         self.entry.bind("<FocusIn>", self._on_focus_in)
@@ -573,7 +869,7 @@ class SearchBox(tk.Frame):
         ring_rect(self.cv, 0.5, 0.5, w - 0.5, H_PILL - 0.5, R_FIELD,
                   fill=fill, active=self._focus, tags="shape")
         self.cv.tag_lower("shape")
-        self.cv.coords(self._win, 28, H_PILL / 2)
+        self.cv.coords(self._win, 30, H_PILL / 2)
         self.cv.itemconfigure(self._win, width=max(20, w - 42), height=20)
 
     def _resize(self, e):
@@ -664,6 +960,9 @@ class SpeakerList(tk.Canvas):
 
 
 def _initials(name: str) -> str:
+    # 中日韩名字取首字：两个方块字塞不进 22px 的头像圆
+    if name and "⺀" <= name[0] <= "鿿":
+        return name[0]
     parts = [p for p in name.replace("-", " ").split() if p]
     if not parts:
         return "?"
@@ -898,7 +1197,7 @@ class Field(tk.Frame):
         self._paint()
 
     def _paint(self):
-        w, h = self.winfo_width(), self.h
+        w, h = self.cv.winfo_width(), self.h
         if w <= 1:
             return
         self.cv.delete("shape")
@@ -1147,8 +1446,8 @@ class Select(tk.Canvas):
         w = max(1, self.winfo_width())
         h = self.ROW_H * len(self.options) + 8
         # 画布项里的控件 rootx 不可靠，一律用 place 的 in_ 相对锚点定位
-        oy = max(0, self.winfo_rooty() - top.winfo_rooty())
-        below = (oy + self.h + 4 + h <= top.winfo_height()) or oy == 0
+        oy = max(0, lpx(self.winfo_rooty() - top.winfo_rooty()))
+        below = (oy + self.h + 4 + h <= lpx(top.winfo_height())) or oy == 0
         pop = tk.Canvas(top, width=w, height=h, bg=self.bgcol,
                         highlightthickness=0, bd=0)
         pop.place(in_=self, x=0, y=(self.h + 4) if below else -(h + 4))
@@ -1318,8 +1617,8 @@ class ModeSwitch(tk.Canvas):
         w = max(int(self["width"]), 210)
         h = self.ROW_H * len(self.modes) + 8
         # 画布项里的控件 rootx 不可靠，一律用 place 的 in_ 相对锚点定位
-        oy = max(0, self.winfo_rooty() - top.winfo_rooty())
-        below = (oy + self.h + 4 + h <= top.winfo_height()) or oy == 0
+        oy = max(0, lpx(self.winfo_rooty() - top.winfo_rooty()))
+        below = (oy + self.h + 4 + h <= lpx(top.winfo_height())) or oy == 0
         pop = tk.Canvas(top, width=w, height=h, bg=self.bgcol,
                         highlightthickness=0, bd=0)
         pop.place(in_=self, x=0, y=(self.h + 4) if below else -(h + 4))
@@ -1388,6 +1687,282 @@ class ModeSwitch(tk.Canvas):
             self._paint()
         if notify and self.command:
             self.command(key)
+
+
+# ------------------------------------------------------------------ 行列表
+class RowList(tk.Canvas):
+    """两行式可多选列表（标题 + 元信息，右侧附注），替代原生 Listbox。
+
+    对外保留 Listbox 的常用子集：insert/delete/get/size、selection_set/
+    selection_clear/curselection、yview 系列，用户改选时发 <<ListboxSelect>>，
+    业务代码与测试可以照旧按 Listbox 的方式驱动。
+    """
+
+    ROW_H = 54
+
+    def __init__(self, master, bg=None, font=None):
+        self.bgcol = C.N0 if bg is None else bg
+        super().__init__(master, bg=self.bgcol, highlightthickness=0, bd=0,
+                         height=1, takefocus=True, yscrollincrement=self.ROW_H)
+        self.items = []          # [{"text","title","meta","aside"}]
+        self.sel = set()
+        self._anchor = None
+        self._hover = -1
+        self._focused = False
+        self.font = font or F_UI
+        self.bind("<Configure>", lambda e: self._paint())
+        self.bind("<Button-1>", self._click)
+        self.bind("<Motion>", self._motion)
+        self.bind("<Leave>", lambda e: self._set_hover(-1))
+        self.bind("<MouseWheel>", lambda e: (self.yview_scroll(int(-e.delta / 120), "units"), "break")[1])
+        self.bind("<Up>", lambda e: self._step(-1, e))
+        self.bind("<Down>", lambda e: self._step(1, e))
+        self.bind("<Control-a>", self._select_all)
+        self.bind("<FocusIn>", lambda e: self._set_focus(True))
+        self.bind("<FocusOut>", lambda e: self._set_focus(False))
+
+    # -- Listbox 兼容 --
+    def _index(self, i):
+        return len(self.items) - 1 if i == "end" else int(i)
+
+    def _span(self, first, last):
+        a = self._index(first)
+        b = a if last is None else self._index(last)
+        return range(max(0, a), min(len(self.items) - 1, b) + 1)
+
+    def insert(self, index, text, title=None, meta=None, aside=None):
+        item = {"text": text, "title": title or text, "meta": meta or "", "aside": aside or ""}
+        pos = len(self.items) if index == "end" else int(index)
+        self.items.insert(pos, item)
+        self._paint()
+
+    def delete(self, first, last=None):
+        idx = list(self._span(first, last))
+        if not idx:
+            return
+        del self.items[idx[0]:idx[-1] + 1]
+        self.sel = {i for i in self.sel if i < len(self.items)}
+        self._paint()
+
+    def get(self, i):
+        return self.items[self._index(i)]["text"]
+
+    def size(self):
+        return len(self.items)
+
+    def curselection(self):
+        return tuple(sorted(self.sel))
+
+    def selection_set(self, first, last=None):
+        self.sel.update(self._span(first, last))
+        self._paint()
+
+    def selection_clear(self, first, last=None):
+        self.sel.difference_update(self._span(first, last))
+        self._paint()
+
+    # -- 绘制 --
+    def _paint(self):
+        self.delete_items()
+        w = self.winfo_width()
+        if w <= 1:
+            return
+        n = len(self.items)
+        self.configure(scrollregion=(0, 0, w, max(n * self.ROW_H, 1)))
+        title_font, meta_font = self.font, F_MINI
+        for i, item in enumerate(self.items):
+            y = i * self.ROW_H
+            on = i in self.sel
+            if on or i == self._hover:
+                fill = C.A50 if on else C.N100
+                round_rect(self, 0.5, y + 2, w - 0.5, y + self.ROW_H - 2, 10,
+                           fill=fill, outline=fill)
+            elif i and (i - 1) not in self.sel and (i - 1) != self._hover:
+                self.create_line(14, y, w - 14, y, fill=C.LINE)
+            aside_w = 0
+            if item["aside"]:
+                aside_w = tkfont.Font(font=F_TIME).measure(item["aside"]) + 16
+                self.create_text(w - 14, y + self.ROW_H / 2, text=item["aside"],
+                                 anchor="e", fill=C.T3, font=F_TIME)
+            room = max(40, w - 28 - aside_w)
+            self.create_text(14, y + 18, anchor="w", font=title_font,
+                             text=fit_text(item["title"], title_font, room),
+                             fill=C.A600 if on else C.TEXT)
+            self.create_text(14, y + 38, anchor="w", font=meta_font,
+                             text=fit_text(item["meta"], meta_font, room), fill=C.SUB)
+        if self._focused and self._anchor is not None and self._anchor < n:
+            y = self._anchor * self.ROW_H
+            round_rect(self, 1, y + 3, w - 1, y + self.ROW_H - 3, 9,
+                       outline=C.FOCUS_INNER, width=1)
+
+    def delete_items(self):
+        tk.Canvas.delete(self, "all")
+
+    # -- 交互 --
+    def _row_at(self, y):
+        i = int(self.canvasy(y) // self.ROW_H)
+        return i if 0 <= i < len(self.items) else -1
+
+    def _notify(self):
+        self._paint()
+        self.event_generate("<<ListboxSelect>>")
+
+    def _click(self, e):
+        self.focus_set()
+        i = self._row_at(e.y)
+        if i < 0:
+            return
+        if e.state & 0x0001 and self._anchor is not None:          # Shift：连选
+            lo, hi = sorted((self._anchor, i))
+            self.sel = set(range(lo, hi + 1))
+        elif e.state & 0x0004:                                      # Ctrl：增减
+            self.sel ^= {i}
+            self._anchor = i
+        else:
+            self.sel = {i}
+            self._anchor = i
+        self._notify()
+
+    def _step(self, d, e):
+        if not self.items:
+            return "break"
+        cur = self._anchor if self._anchor is not None else (-1 if d > 0 else len(self.items))
+        i = max(0, min(len(self.items) - 1, cur + d))
+        self._anchor = i
+        self.sel = {i}
+        self._reveal(i)
+        self._notify()
+        return "break"
+
+    def _reveal(self, i):
+        top, bottom = self.yview()
+        n = max(1, len(self.items))
+        if i / n < top:
+            self.yview_moveto(i / n)
+        elif (i + 1) / n > bottom:
+            self.yview_moveto(max(0.0, (i + 1) / n - (bottom - top)))
+
+    def _select_all(self, _=None):
+        self.sel = set(range(len(self.items)))
+        self._notify()
+        return "break"
+
+    def _set_hover(self, i):
+        if i != self._hover:
+            self._hover = i
+            self._paint()
+
+    def _motion(self, e):
+        self._set_hover(self._row_at(e.y))
+
+    def _set_focus(self, on):
+        self._focused = on
+        self._paint()
+
+
+# ------------------------------------------------------------------ 输入对话框
+def ask_string(parent, title, prompt="", initial=""):
+    """主题化的单行输入框（模态）。确定返回文本，取消/关闭返回 None。"""
+    root = parent.winfo_toplevel()
+    win = tk.Toplevel(root)
+    win.withdraw()
+    win.title(title)
+    win.transient(root)
+    win.resizable(False, False)
+    win.configure(bg=C.N50)
+    result = {"value": None}
+    body = tk.Frame(win, bg=C.N50)
+    body.pack(fill="both", expand=True, padx=20, pady=(18, 16))
+    if prompt:
+        tk.Label(body, text=prompt, bg=C.N50, fg=C.SUB, font=F_SMALL,
+                 anchor="w").pack(fill="x", pady=(0, 8))
+    field = Field(body, width=320, value=initial, bg=C.N50)
+    field.pack(fill="x")
+    row = tk.Frame(body, bg=C.N50)
+    row.pack(fill="x", pady=(16, 0))
+
+    def ok(_=None):
+        result["value"] = field.get()
+        win.destroy()
+
+    def cancel(_=None):
+        win.destroy()
+
+    Pill(row, "确定", ok, kind="primary", bg=C.N50).pack(side="right")
+    Pill(row, "取消", cancel, kind="secondary", bg=C.N50).pack(side="right", padx=(0, 8))
+    win.bind("<Return>", ok)
+    win.bind("<Escape>", cancel)
+    win.protocol("WM_DELETE_WINDOW", cancel)
+    win.update_idletasks()
+    x = root.winfo_rootx() + (root.winfo_width() - win.winfo_reqwidth()) // 2
+    y = root.winfo_rooty() + (root.winfo_height() - win.winfo_reqheight()) // 3
+    win.geometry(f"+{max(0, x)}+{max(0, y)}")
+    win.deiconify()
+    field.entry.focus_set()
+    field.entry.select_range(0, "end")
+    try:
+        win.grab_set()
+    except tk.TclError:
+        pass
+    root.wait_window(win)
+    return result["value"]
+
+
+# ------------------------------------------------------------------ 复选框
+class Check(tk.Canvas):
+    """圆角复选框 + 文案，绑定 BooleanVar；原生 Checkbutton 的方框在高 DPI 下过小。"""
+
+    BOX = 16
+
+    def __init__(self, master, text, variable, command=None, bg=None, font=None):
+        self.bgcol = bg or _parent_bg(master)
+        self.text, self.var, self.command = text, variable, command
+        self.font = font or F_SMALL
+        self._hover = self._focused = False
+        self.h = 26
+        w = self.BOX + 8 + tkfont.Font(font=self.font).measure(text) + 2
+        super().__init__(master, width=w, height=self.h, bg=self.bgcol,
+                         highlightthickness=0, bd=0, cursor="hand2", takefocus=True)
+        for seq in ("<Button-1>", "<space>"):
+            self.bind(seq, self.toggle)
+        self.bind("<Enter>", lambda e: self._set("_hover", True))
+        self.bind("<Leave>", lambda e: self._set("_hover", False))
+        self.bind("<FocusIn>", lambda e: self._set("_focused", True))
+        self.bind("<FocusOut>", lambda e: self._set("_focused", False))
+        self._trace = variable.trace_add("write", lambda *a: self._paint())
+        self.bind("<Destroy>", self._untrace, add="+")
+        self._paint()
+
+    def _untrace(self, _=None):
+        try:
+            self.var.trace_remove("write", self._trace)
+        except (tk.TclError, ValueError):
+            pass
+
+    def _set(self, attr, value):
+        setattr(self, attr, value)
+        self._paint()
+
+    def _paint(self):
+        self.delete("all")
+        on = bool(self.var.get())
+        b, y = self.BOX, (self.h - self.BOX) / 2
+        if on:
+            round_rect(self, 0.5, y + 0.5, b - 0.5, y + b - 0.5, 4, fill=C.A500, outline=C.A500)
+            self.create_image(1, y + 1, anchor="nw",
+                              image=icons.photo("check", b - 2, "#FFFFFF", master=self))
+        else:
+            edge = C.SUB if (self._hover or self._focused) else C.N300
+            round_rect(self, 0.5, y + 0.5, b - 0.5, y + b - 0.5, 4, fill=C.N0, outline=edge, width=1.2)
+        self.create_text(b + 8, self.h / 2 + 0.5, text=self.text, anchor="w",
+                         fill=C.TEXT if self._hover else C.SUB, font=self.font)
+
+    def toggle(self, _=None):
+        self.focus_set()
+        self.var.set(not bool(self.var.get()))
+        if self.command:
+            self.command()
+        return "break"
 
 
 # ------------------------------------------------------------------ 开关
@@ -1504,7 +2079,7 @@ class PickList(tk.Canvas):
     def _on_resize(self, _event=None):
         """按当前高度更新可见行数（滚轮与翻页都依赖 self.rows）。"""
         try:
-            visible = max(2, (self.winfo_height() - 10) // self.ROW_H)
+            visible = max(2, int((self.winfo_height() - 10) // self.ROW_H))
             if visible != self.rows:
                 self.rows = visible
                 self._clamp()

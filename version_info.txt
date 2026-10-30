@@ -15,13 +15,13 @@ VSVersionInfo(
     StringFileInfo([
       StringTable(
         '080404b0',
-        [StringStruct('CompanyName', 'TeamsSub contributors'),
-         StringStruct('FileDescription', 'TeamsSub 会议实时字幕'),
+        [StringStruct('CompanyName', 'TeamSub contributors'),
+         StringStruct('FileDescription', 'TeamSub 会议实时字幕'),
          StringStruct('FileVersion', '0.1.15'),
-         StringStruct('InternalName', 'TeamsSub'),
+         StringStruct('InternalName', 'TeamSub'),
          StringStruct('LegalCopyright', 'MIT License'),
-         StringStruct('OriginalFilename', 'TeamsSub.exe'),
-         StringStruct('ProductName', 'TeamsSub'),
+         StringStruct('OriginalFilename', 'TeamSub.exe'),
+         StringStruct('ProductName', 'TeamSub'),
          StringStruct('ProductVersion', '0.1.15')])
     ]),
     VarFileInfo([VarStruct('Translation', [2052, 1200])])

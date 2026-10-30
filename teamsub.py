@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-TeamsSub —— 多会议平台实时字幕阅读器
+TeamSub —— 多会议平台实时字幕阅读器
 ====================================
 通过 Windows UIA（无障碍接口）直接读取会议软件中的「实时字幕」文本节点，
 不截图、不 OCR、不改动会议软件本体。左上角可切换会议模式（Teams / 飞书…）。
@@ -84,10 +84,10 @@ RESOURCE_DIR = _resource_dir()  # 只读资源（随 exe 打包）
 # 版本号：用户来报问题时第一句总是「你用的哪个版本」，得有个地方能自报。
 # 常量放在模块顶层（而不是 pyproject/打包元数据里），是为了让源码运行、
 # 冻结成 exe 两种方式读到的都是同一个值。
-APP_DISPLAY_NAME = "TeamsSub"
+APP_DISPLAY_NAME = "TeamSub"
 APP_VERSION = "0.1.15"
 
-CAPTION_DIR = Path(os.environ.get("TEAMSSUB_DATA_DIR", APP_DIR)) / "captions"
+CAPTION_DIR = Path(os.environ.get("TEAMSUB_DATA_DIR", APP_DIR)) / "captions"
 
 
 def _ensure_data_dirs() -> str:
@@ -104,7 +104,7 @@ def _ensure_data_dirs() -> str:
     except Exception as exc:
         return ("无法创建数据目录：\n%s\n\n%s\n\n"
                 "请把程序放到有写权限的目录（不要放在 Program Files 下），\n"
-                "或设置环境变量 TEAMSSUB_DATA_DIR 指向一个可写目录。"
+                "或设置环境变量 TEAMSUB_DATA_DIR 指向一个可写目录。"
                 % (CAPTION_DIR, exc))
 
 
@@ -112,9 +112,9 @@ def data_dir():
     """数据根目录：字幕、配置、日志都在它下面。
 
     每次现读环境变量，和 _error_path() 保持同一套隔离语义——测试把
-    TEAMSSUB_DATA_DIR 指到临时目录后，这里也必须跟着走。
+    TEAMSUB_DATA_DIR 指到临时目录后，这里也必须跟着走。
     """
-    return Path(os.environ.get("TEAMSSUB_DATA_DIR", APP_DIR))
+    return Path(os.environ.get("TEAMSUB_DATA_DIR", APP_DIR))
 
 
 # ----------------------------------------------------------------------------
@@ -205,16 +205,16 @@ SESSION_STAMP = APP_DIR / "cache" / "session.json"
 
 
 def session_stamp_path():
-    if os.environ.get("TEAMSSUB_DATA_DIR"):
-        return Path(os.environ["TEAMSSUB_DATA_DIR"]) / "cache" / "session.json"
+    if os.environ.get("TEAMSUB_DATA_DIR"):
+        return Path(os.environ["TEAMSUB_DATA_DIR"]) / "cache" / "session.json"
     return SESSION_STAMP
 
 
 def _error_path():
-    """测试会把 TEAMSSUB_DATA_DIR 指到临时目录，日志也跟着走。"""
+    """测试会把 TEAMSUB_DATA_DIR 指到临时目录，日志也跟着走。"""
     if ERROR_LOG.parent == APP_DIR / "cache" and \
-            os.environ.get("TEAMSSUB_DATA_DIR"):
-        return Path(os.environ["TEAMSSUB_DATA_DIR"]) / "cache" / "error.log"
+            os.environ.get("TEAMSUB_DATA_DIR"):
+        return Path(os.environ["TEAMSUB_DATA_DIR"]) / "cache" / "error.log"
     return ERROR_LOG
 
 
@@ -930,6 +930,10 @@ class App:
         self.reader.simplify = True
 
         UK.set_theme(getattr(self.tcfg, "theme", "light"))
+        # 恢复检查要看的是「上一次」的登记。必须在采集开始前读出来：
+        # 启动后很快来的字幕会把登记改写成本次会话，延时检查就会把
+        # 正在进行的这场误报成「上次没有正常结束」。
+        self._startup_stamp = self._read_session_stamp()
         self._build_ui()
         self.reader.start()
         if self.tcfg.enabled and self._has_credentials():
@@ -1042,7 +1046,7 @@ class App:
         self._tray_hinted = True
         try:
             self.tray.balloon(
-                "TeamsSub 已收进托盘",
+                "TeamSub 已收进托盘",
                 "任务栏不再占位。点击右下角图标（或双击）随时把窗口叫回来。")
         except Exception:
             pass
@@ -1052,7 +1056,7 @@ class App:
         """挂托盘图标，保留正常标题栏和任务栏入口。"""
         self.tray = tray
         try:
-            self.tray.set_tip("TeamsSub · %s" % (self._meeting_txt or "实时字幕"))
+            self.tray.set_tip("TeamSub · %s" % (self._meeting_txt or "实时字幕"))
         except Exception:
             pass
         self._schedule_tray_poll()
@@ -1062,7 +1066,7 @@ class App:
         tray = getattr(self, "tray", None)
         if tray is None:
             return
-        txt = "TeamsSub · %s" % (self._meeting_txt or "实时字幕")
+        txt = "TeamSub · %s" % (self._meeting_txt or "实时字幕")
         if getattr(self, "_tray_tip", None) == txt:
             return
         self._tray_tip = txt
@@ -1151,6 +1155,8 @@ class App:
         guard = getattr(self, "_sheet_guard", None)
         return guard is None or guard()
 
+    NAV_PAGES = ("历史会议", "设置", "帮助")
+
     def _show_sheet(self, title, builder, push=False):
         """在内容区推入一层。push=True 时保留当前层，返回时回到它。"""
         if getattr(self, "_sheet_open", False) and not self._allow_leave_sheet():
@@ -1177,11 +1183,13 @@ class App:
         for w in layer.winfo_children():
             w.destroy()
 
+        # 导航里的目的地（历史/设置/帮助）由导航高亮表明位置，不另起标题；
+        # 从别处推进来的页面（确认、导出、记录详情…）只带「返回」。
         top = tk.Frame(layer, bg=UK.C.N50)
-        top.pack(fill="x", padx=6, pady=(2, 10))
-        UK.Pill(top, "‹ 返回", self._close_sheet, kind="ghost", padx=10).pack(side="left")
-        tk.Label(top, text=title, bg=UK.C.N50, fg=UK.C.TEXT,
-                 font=UK.F_HEAD).pack(side="left", padx=12)
+        top.pack(fill="x", padx=24, pady=(20, 12))
+        if self._sheet_stack or title not in self.NAV_PAGES:
+            UK.Pill(top, "返回", self._close_sheet, kind="ghost", padx=10, icon="back",
+                    tooltip="Esc").pack(side="left")
 
         self._sheet_footer = tk.Frame(layer, bg=UK.C.N50)
         wrap = tk.Frame(layer, bg=UK.C.N50)
@@ -1428,7 +1436,7 @@ class App:
         # 状态文案复位到「正在查找」
         self._meeting_txt = f"正在查找 {m['name']}…"
         self.lbl_meeting.configure(text=self._meeting_txt)
-        self.root.title(f"TeamsSub · {m['short']} 实时字幕")
+        self.root.title(f"TeamSub · {m['short']} 实时字幕")
         self.status.set(*self._status_for("init"))
         self.lbl_stat.configure(text="")
         if hasattr(self, "mode_sw"):
@@ -1531,10 +1539,10 @@ class App:
                           command=self.toggle_float_on_min)
         m.add_command(label="帮助", command=self.show_help)
         m.add_separator()
-        m.add_command(label="退出 TeamsSub", command=self.on_close)
+        m.add_command(label="退出 TeamSub", command=self.on_close)
         try:
-            m.tk_popup(self.btn_more.winfo_rootx() - 120,
-                       self.btn_more.winfo_rooty() + self.btn_more.winfo_height() + 6)
+            m.tk_popup(self.btn_more.winfo_rootx() - UK.px(120),
+                       self.btn_more.winfo_rooty() + UK.px(self.btn_more.winfo_height() + 6))
         finally:
             m.grab_release()
 
@@ -1553,12 +1561,23 @@ class App:
         """历史字幕（启动前已产生的）没有可信时间，显示占位。"""
         return "--:--:--" if rec.get("backlog") or not isinstance(rec.get("ts"), datetime) else rec["ts"].strftime("%H:%M:%S")
 
+    def _empty_reason(self):
+        """空状态的原因：还没有字幕 / 有字幕但被清屏 / 被搜索或发言人筛掉。"""
+        if not self.records:
+            return "waiting"
+        search = getattr(self, "search", None)
+        if self.speaker_filter or (search is not None and search.value()):
+            return "filtered"
+        return "cleared"
+
     def show_placeholder(self):
         self.txt.configure(state="normal")
         self.txt.delete("1.0", "end")
         self.txt.configure(state="disabled")
         try:
-            self.empty_box.place(relx=0.5, rely=0.38, anchor="center")
+            import frontend_shell
+            frontend_shell.set_empty_state(self, self._empty_reason())
+            self.empty_box.place(relx=0.5, rely=0.4, anchor="center")
         except Exception:
             pass
         self.placeholder_active = True
@@ -2251,8 +2270,8 @@ class App:
             self.root.after_cancel(previous)
         label = self.lbl_feedback
         message = ('✓  ' if msg.startswith('已复制') else '') + msg
-        available = label.master.winfo_width()
-        width = max(200, (available if available > 1 else self.root.winfo_width() - 208) - 12)
+        available = UK.lpx(label.master.winfo_width())
+        width = max(200, (available if available > 1 else UK.lpx(self.root.winfo_width()) - 208) - 12)
         label.configure(text=UK.fit_text(message, UK.F_MINI, width), fg=UK.C.A600)
         label.place(x=0, y=0, relheight=1)
         label.tk.call('raise', label._w)
@@ -2392,41 +2411,54 @@ class App:
         except Exception:
             pass
 
+    @staticmethod
+    def _read_session_stamp():
+        try:
+            path = session_stamp_path()
+            if path.exists():
+                return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}       # 损坏的登记：交给 _check_recovery 清理
+        return None
+
+    def _clear_previous_stamp(self, previous):
+        """只清上一次的登记；文件若已被本次会话改写，保留它。"""
+        current = self._read_session_stamp()
+        if current is None:
+            return
+        if current == previous or current == {}:
+            self._clear_session_stamp()
+
     def _check_recovery(self):
         """启动时若发现上次没收尾，把那份记录指给用户。
 
         只给入口，不自动续接：自动切到旧会议会让下一句字幕记进错误的文件，
         比让用户多点一下糟糕得多。
         """
-        try:
-            path = session_stamp_path()
-            if not path.exists():
-                return
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except Exception:
-            self._clear_session_stamp()
+        data = getattr(self, "_startup_stamp", None)
+        self._startup_stamp = None
+        if data is None:
             return
         try:
             target = Path(data.get("path") or "")
-            if not target.exists():
-                self._clear_session_stamp()
-                return
-            age = time.time() - float(data.get("ts") or 0)
+            ts = float(data.get("ts") or 0)
         except Exception:
-            self._clear_session_stamp()
+            self._clear_previous_stamp(data)
             return
-        if age > 7 * 86400:             # 一周前的残留不再打扰
-            self._clear_session_stamp()
+        same_as_current = bool(self.save_path) and str(target) == str(self.save_path)
+        stale = time.time() - ts > 7 * 86400      # 一周前的残留不再打扰
+        if not data.get("path") or not target.exists() or same_as_current or stale:
+            self._clear_previous_stamp(data)
             return
         title = data.get("title") or target.stem
-        when = datetime.fromtimestamp(float(data.get("ts") or time.time()))
+        when = datetime.fromtimestamp(ts or time.time())
         self._confirm(
             "上次会议「%s」（%s）没有正常结束——可能是崩溃、断电或被强制结束。\n\n"
             "字幕已逐条写入磁盘，记录仍在：\n%s\n\n"
             "要现在打开这份记录吗？打开只是查看，不会切换当前的采集源。"
             % (title, when.strftime("%m-%d %H:%M"), target.name),
             lambda: self._open_file(target), "打开记录", push=False)
-        self._clear_session_stamp()
+        self._clear_previous_stamp(data)
 
     @staticmethod
     def _open_file(path):
@@ -2482,7 +2514,7 @@ class App:
             head = tk.Label(b, bg=UK.C.N0, fg=UK.C.SUB, font=UK.F_MINI,
                             anchor='w', justify='left')
             head.pack(fill='x')
-            head.configure(text=f"{APP_DISPLAY_NAME} v{APP_VERSION} · {data_dir()}",
+            head.configure(text=f"数据目录  {data_dir()}",
                            wraplength=680)
             tabs = tk.Frame(b, bg=UK.C.N0)
             tabs.pack(anchor='w', pady=(10, 12))
@@ -2500,7 +2532,9 @@ class App:
                          ('删除', '移入系统回收站，可还原'), ('旧版 Markdown', '缺时间的一律记为未知')],
                 '操作': [('Ctrl+F', '搜索'), ('Ctrl+L', '清屏'), ('Escape', '返回上一层'),
                          ('点失败译文', '重试该条'), ('右键译文', '修正译法'),
-                         ('右键正文', '复制 / 全选'), ('更多菜单', '置顶、悬浮窗、导出')]}
+                         ('右键正文', '复制 / 全选'), ('更多菜单', '置顶、悬浮窗、导出')],
+                '导航': [('Ctrl+1', '实时会议'), ('Ctrl+2', '历史会议'), ('Ctrl+,', '设置'),
+                         ('F1', '帮助'), ('悬停按钮', '显示用途与快捷键')]}
             buttons = []
             holder = {}
 
@@ -2518,7 +2552,7 @@ class App:
                 btn = UK.Pill(tabs, key, lambda key=key: select(key), kind='tab', bg=UK.C.N0)
                 btn.pack(side='left', padx=(0, 8))
                 buttons.append((key, btn))
-            b.bind('<Configure>', lambda e: head.configure(wraplength=max(200, e.width - 10)))
+            b.bind('<Configure>', lambda e: head.configure(wraplength=max(200, UK.lpx(e.width) - 10)))
             select('采集')
         self._show_sheet('帮助', build)
 
@@ -2534,7 +2568,10 @@ class App:
 
     def _sync_nav(self, title='实时会议'):
         target = '历史会议' if title in ('历史会议', '会议记录') else title
-        for label, btn in getattr(self, 'nav_buttons', {}).items():
+        buttons = getattr(self, 'nav_buttons', {})
+        if target not in buttons:
+            return      # 确认、导出等临时页面不改变当前所在位置
+        for label, btn in buttons.items():
             btn.set_kind('selected' if target in label else 'ghost')
 
     def show_live(self):
@@ -2938,10 +2975,10 @@ class App:
             pass
 
 
-_MUTEX_NAME = "Local\\TeamsSub_SingleInstance"
+_MUTEX_NAME = "Local\\TeamSub_SingleInstance"
 _MUTEX_HANDLE = None      # 持有句柄：进程存活期间锁才有效（勿 CloseHandle）
 _INSTANCE_FILE = APP_DIR / "cache" / "instance.pid"
-_EXIT_REQUEST_PROPERTY = "TeamsSub.ExplicitExit"
+_EXIT_REQUEST_PROPERTY = "TeamSub.ExplicitExit"
 
 
 def _consume_exit_request(root):
@@ -3118,7 +3155,7 @@ def _find_orphan_pids():
     return [p for p in cands if _pid_state(p) == "python"]
 
 
-def _find_teamssub_window():
+def _find_teamsub_window():
     """找正在运行实例的**主窗口**，主窗口不在时再退回悬浮条。
 
     优先级不能只看「谁可见」：最小化后主窗口仍然是 visible(iconic)，而悬浮
@@ -3140,7 +3177,7 @@ def _find_teamssub_window():
             buf = ctypes.create_unicode_buffer(n + 1)
             user32.GetWindowTextW(hwnd, buf, n + 1)
             title = buf.value
-            if title.startswith("TeamsSub"):
+            if title.startswith("TeamSub"):
                 cls = ctypes.create_unicode_buffer(256)
                 user32.GetClassNameW(hwnd, cls, 256)
                 # 只认 Tk 的顶层窗口，避开 TclNotifier / IME 之类的辅助窗口
@@ -3159,7 +3196,7 @@ def _find_teamssub_window():
     return None
 
 
-def _focus_teamssub(hwnd):
+def _focus_teamsub(hwnd):
     """还原并置前旧窗口；置前被系统拦截时闪烁任务栏提醒。"""
     import ctypes
     from ctypes import wintypes
@@ -3296,7 +3333,7 @@ def _acquire_single_instance() -> bool:
         for _ in range(50):                     # 最多等 ~20s
             if acquire():                       # 旧实例已退出 → 直接启动新版
                 return True
-            hwnd = _find_teamssub_window()
+            hwnd = _find_teamsub_window()
             if hwnd:
                 break
             time.sleep(0.4)
@@ -3308,16 +3345,16 @@ def _acquire_single_instance() -> bool:
             if not victims:
                 user32.MessageBoxW(
                     None,
-                    "TeamsSub 已在运行，但未找到它的窗口。\n\n"
+                    "TeamSub 已在运行，但未找到它的窗口。\n\n"
                     "请打开任务管理器 →「详细信息」页，结束 pythonw.exe，再试一次。",
-                    "TeamsSub", 0x30)           # MB_ICONWARNING
+                    "TeamSub", 0x30)           # MB_ICONWARNING
                 return False
             ans = user32.MessageBoxW(
                 None,
-                "检测到一个没有窗口的 TeamsSub 残留实例（PID %s）。\n"
+                "检测到一个没有窗口的 TeamSub 残留实例（PID %s）。\n"
                 "它正占用单实例锁，导致新版本无法启动。\n\n"
                 "是否结束该进程并启动新版本？" % "、".join(str(p) for p in victims),
-                "TeamsSub", 0x04 | 0x20)        # MB_YESNO | MB_ICONQUESTION
+                "TeamSub", 0x04 | 0x20)        # MB_YESNO | MB_ICONQUESTION
             if ans != 6:
                 return False
             for p in victims:
@@ -3326,7 +3363,7 @@ def _acquire_single_instance() -> bool:
             if wait_lock(40, 0.25):             # 最多等 ~10s
                 return True
             user32.MessageBoxW(None, "残留实例未能退出，请重启电脑后再试。",
-                               "TeamsSub", 0x30)
+                               "TeamSub", 0x30)
             return False
 
         old_pid = _window_pid(hwnd)
@@ -3337,17 +3374,17 @@ def _acquire_single_instance() -> bool:
 
         if not _sources_newer_than(old_pid):
             # 源码没动过：用户只是想把窗口找回来。静默还原，本次退出。
-            _focus_teamssub(hwnd)
+            _focus_teamsub(hwnd)
             return False
 
         ans = user32.MessageBoxW(
             None,
-            "TeamsSub 正在运行，且程序文件已更新。\n\n"
+            "TeamSub 正在运行，且程序文件已更新。\n\n"
             "是否关闭当前实例并启动新版本？\n"
             "（点「否」则保留正在运行的旧版本）",
-            "TeamsSub", 0x04 | 0x20)            # MB_YESNO | MB_ICONQUESTION
+            "TeamSub", 0x04 | 0x20)            # MB_YESNO | MB_ICONQUESTION
         if ans != 6:                            # IDNO → 聚焦旧窗口
-            _focus_teamssub(hwnd)
+            _focus_teamsub(hwnd)
             return False
         if _pid_state(old_pid) == "none":
             if wait_lock(8, 0.25):
@@ -3359,12 +3396,42 @@ def _acquire_single_instance() -> bool:
         user32.PostMessageW(hwnd, 0x0010, 0, 0)
         if wait_lock(30, 0.4):                    # 最多等 ~12s
             return True
-        _focus_teamssub(hwnd)
+        _focus_teamsub(hwnd)
         user32.MessageBoxW(None, "旧实例未能退出，已保留原实例。",
-                           "TeamsSub", 0x30)
+                           "TeamSub", 0x30)
         return False
     except Exception:
         return True        # 单实例机制自身出错时宁可照常启动，不挡用户
+
+
+def _enable_dpi_awareness():
+    """声明系统级 DPI 感知：否则 Windows 把 100% 的位图整体拉伸，高缩放屏上发虚。
+
+    必须在创建任何窗口之前调用。按系统 DPI 一次定标（不做每显示器动态
+    缩放），跨屏拖动时由系统处理。
+    """
+    try:
+        import ctypes
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(1)
+        except (AttributeError, OSError):
+            ctypes.windll.user32.SetProcessDPIAware()
+    except (AttributeError, OSError):
+        pass
+
+
+def init_ui_scale(root):
+    """按屏幕 DPI 定界面缩放系数；TEAMSUB_UI_SCALE 可强制指定（调试/截图）。"""
+    forced = os.environ.get("TEAMSUB_UI_SCALE", "").strip()
+    try:
+        if forced:
+            scale = float(forced)
+            root.tk.call("tk", "scaling", scale * 96 / 72)   # 字体跟着同一系数
+        else:
+            scale = root.winfo_fpixels("1i") / 96
+    except (ValueError, tk.TclError):
+        return
+    UK.install_scale(scale)
 
 
 def main():
@@ -3385,7 +3452,9 @@ def main():
             pass
         return
     _write_instance_file()
+    _enable_dpi_awareness()
     root = tk.Tk()
+    init_ui_scale(root)
     install_crash_log(root)
     try:
         root.iconbitmap(default=str(RESOURCE_DIR / "teamsub.ico"))

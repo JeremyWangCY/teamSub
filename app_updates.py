@@ -14,7 +14,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-REPOSITORY = "JeremyWangCY/teamsSub"
+REPOSITORY = "JeremyWangCY/teamSub"
 RELEASES_URL = f"https://github.com/{REPOSITORY}/releases"
 LATEST_API_URL = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"
 MAX_RESPONSE_BYTES = 1024 * 1024
@@ -66,7 +66,7 @@ def _validate_asset(release):
         tag = release.url.removeprefix(prefix)
         if (not release.url.startswith(prefix) or tag.removeprefix('v') != release.version
                 or version_tuple(tag) != version_tuple(release.version)
-                or asset.filename != f"TeamsSub-Setup-{release.version}.exe"
+                or asset.filename != f"TeamSub-Setup-{release.version}.exe"
                 or asset.url != f"{RELEASES_URL}/download/{tag}/{asset.filename}"
                 or type(asset.size) is not int or not 2 <= asset.size <= MAX_INSTALLER_BYTES
                 or not re.fullmatch(r"[a-fA-F0-9]{64}", asset.sha256)):
@@ -81,7 +81,7 @@ def _release_asset(data, version, tag):
     if not isinstance(assets, list):
         raise ValueError('invalid assets')
     matches = [item for item in assets if isinstance(item, dict)
-               and item.get('name') == f'TeamsSub-Setup-{version}.exe']
+               and item.get('name') == f'TeamSub-Setup-{version}.exe']
     if len(matches) > 1:
         raise ValueError('ambiguous installer')
     if not matches:
@@ -100,7 +100,7 @@ def _release_asset(data, version, tag):
 def check_latest_release():
     request = urllib.request.Request(LATEST_API_URL, headers={
         "Accept": "application/vnd.github+json",
-        "User-Agent": "TeamsSub-update-check",
+        "User-Agent": "TeamSub-update-check",
         "X-GitHub-Api-Version": "2022-11-28",
     })
     try:
@@ -201,7 +201,7 @@ def download_installer(release, directory, progress=None, cancel=None):
                     progress(asset.size, asset.size)
                 return final
         request = urllib.request.Request(asset.url, headers={
-            'Accept': 'application/octet-stream', 'User-Agent': 'TeamsSub-update-download'})
+            'Accept': 'application/octet-stream', 'User-Agent': 'TeamSub-update-download'})
         received = 0
         if progress:
             progress(0, asset.size)
@@ -306,9 +306,9 @@ def prepare_install(installer, release, current_exe=None):
     installer = Path(installer).resolve()
     verify_installer(installer, asset)
     executable = Path(current_exe or sys.executable).resolve()
-    if executable.name.casefold() != 'teamssub.exe' or installer.parent == executable.parent:
-        raise UpdateCheckError('请从正式安装目录运行 TeamsSub 后重试')
-    backup = installer.parent / 'TeamsSub.previous.exe'
+    if executable.name.casefold() != 'teamsub.exe' or installer.parent == executable.parent:
+        raise UpdateCheckError('请从正式安装目录运行 TeamSub 后重试')
+    backup = installer.parent / 'TeamSub.previous.exe'
     temporary = None
     try:
         if not executable.is_file():
@@ -318,9 +318,9 @@ def prepare_install(installer, release, current_exe=None):
             if shutil.disk_usage(directory).free < needed:
                 raise UpdateCheckError('磁盘空间不足，请清理后重试')
         # os.access 在 Windows ACL 下不可靠，实际创建后立即删除测试文件。
-        with tempfile.TemporaryFile(prefix='.TeamsSub-write-check-', dir=executable.parent):
+        with tempfile.TemporaryFile(prefix='.TeamSub-write-check-', dir=executable.parent):
             pass
-        with tempfile.NamedTemporaryFile(prefix='TeamsSub.previous.', suffix='.part',
+        with tempfile.NamedTemporaryFile(prefix='TeamSub.previous.', suffix='.part',
                                           dir=installer.parent, delete=False) as stream:
             temporary = Path(stream.name)
             with executable.open('rb') as current:
@@ -333,10 +333,10 @@ def prepare_install(installer, release, current_exe=None):
         os.replace(temporary, backup)
         temporary = None
         arguments = ('/SILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-',
-                     f'/DIR={executable.parent}', '/TeamsSubUpdate=1',
-                     f'/TeamsSubWaitPid={os.getpid()}',
-                     f'/TeamsSubWaitParentPid={_same_image_parent(executable)}',
-                     f'/TeamsSubBackup={backup}', f'/TeamsSubBackupSHA256={digest}',
+                     f'/DIR={executable.parent}', '/TeamSubUpdate=1',
+                     f'/TeamSubWaitPid={os.getpid()}',
+                     f'/TeamSubWaitParentPid={_same_image_parent(executable)}',
+                     f'/TeamSubBackup={backup}', f'/TeamSubBackupSHA256={digest}',
                      f'/LOG={installer.parent / "install.log"}')
         return InstallPlan(installer, asset, executable, backup, digest, arguments)
     except OSError:

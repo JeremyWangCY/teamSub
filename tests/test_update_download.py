@@ -20,7 +20,7 @@ PACKAGE = b'MZ' + b'valid installer data' * 15000
 
 
 def release_for(data=PACKAGE):
-    filename = 'TeamsSub-Setup-9.1.0.exe'
+    filename = 'TeamSub-Setup-9.1.0.exe'
     asset = U.InstallerAsset(filename, f'{U.RELEASES_URL}/download/v9.1.0/{filename}',
                              len(data), hashlib.sha256(data).hexdigest())
     return U.Release('9.1.0', f'{U.RELEASES_URL}/tag/v9.1.0', asset)
@@ -153,7 +153,7 @@ class InstallPlanTests(unittest.TestCase):
         self.release = release_for()
         self.package = self.package_dir / self.release.installer.filename
         self.package.write_bytes(PACKAGE)
-        self.app = base / '中文 已安装 程序' / 'TeamsSub.exe'
+        self.app = base / '中文 已安装 程序' / 'TeamSub.exe'
         self.app.parent.mkdir()
         self.original = b'MZold app preserving data elsewhere'
         self.app.write_bytes(self.original)
@@ -168,7 +168,7 @@ class InstallPlanTests(unittest.TestCase):
         with patch.object(U.subprocess, 'Popen') as launch, patch.object(U, '_same_image_parent', return_value=765):
             plan = self.prepare()
             launch.assert_not_called()
-            self.assertEqual(plan.backup_path.name, 'TeamsSub.previous.exe')
+            self.assertEqual(plan.backup_path.name, 'TeamSub.previous.exe')
             self.assertEqual(plan.backup_path.read_bytes(), self.original)
             self.assertEqual(plan.backup_sha256, hashlib.sha256(self.original).hexdigest())
             self.assertNotEqual(plan.backup_path.parent, self.app.parent)
@@ -177,9 +177,9 @@ class InstallPlanTests(unittest.TestCase):
         self.assertIsInstance(command, list)
         self.assertEqual(command[0], str(self.package.resolve()))
         for flag in ('/SILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-',
-                     f'/DIR={self.app.parent.resolve()}', '/TeamsSubUpdate=1',
-                     f'/TeamsSubWaitPid={os.getpid()}', '/TeamsSubWaitParentPid=765',
-                     f'/TeamsSubBackup={plan.backup_path}', f'/TeamsSubBackupSHA256={plan.backup_sha256}'):
+                     f'/DIR={self.app.parent.resolve()}', '/TeamSubUpdate=1',
+                     f'/TeamSubWaitPid={os.getpid()}', '/TeamSubWaitParentPid=765',
+                     f'/TeamSubBackup={plan.backup_path}', f'/TeamSubBackupSHA256={plan.backup_sha256}'):
             self.assertIn(flag, command)
         self.assertFalse(launch.call_args.kwargs['shell'])
         self.assertEqual(launch.call_args.kwargs['env']['PYINSTALLER_RESET_ENVIRONMENT'], '1')

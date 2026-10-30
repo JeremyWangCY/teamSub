@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 import time
 import tkinter as tk
-from tkinter import filedialog, messagebox, simpledialog
+from tkinter import filedialog, messagebox
 from dataclasses import replace
 import ui_kit as UK
 import meeting_export as ME
@@ -59,9 +59,7 @@ def open_export(app, records=None, title=None, initial_format=None):
         stamp = tk.BooleanVar(value=saved.get('timestamps', True) if isinstance(saved.get('timestamps', True), bool) else True)
         synthetic = tk.BooleanVar(value=saved.get('synthetic_timing', False) if isinstance(saved.get('synthetic_timing', False), bool) else False)
         def check(text, var):
-            tk.Checkbutton(choices, text=text, variable=var, bg=UK.C.N0, fg=UK.C.SUB,
-                           selectcolor=UK.C.N0, activebackground=UK.C.N0, activeforeground=UK.C.TEXT,
-                           font=UK.F_SMALL).pack(side='left', padx=(0, 12))
+            UK.Check(choices, text, var, bg=UK.C.N0).pack(side='left', padx=(0, 16))
         check('包含姓名', name)
         check('正文时间', stamp)
         check('SRT 阅读时间轴（每条 3 秒）', synthetic)
@@ -168,8 +166,7 @@ def rename_meeting(app, session, saved):
     if not MR.editable(session.path):
         app._notice('旧版 Markdown 请先续接并另存为新版会议，再重命名。')
         return
-    title = simpledialog.askstring('重命名会议', '会议名称：',
-                                   initialvalue=session.title, parent=app.root)
+    title = UK.ask_string(app.root, '重命名会议', initial=session.title)
     if title is None:
         return
     try:
@@ -198,24 +195,25 @@ def open_history(app):
     def build(parent):
         b = card(parent)
 
-        status = label(b, '正在读取本地记录…', small=True)
+        # 搜索 · 重命名 在左，计数/结果提示靠右，同一行
         search_row = tk.Frame(b, bg=UK.C.N0)
-        search_row.pack(anchor='w', pady=8)
-        search = UK.SearchBox(search_row, width=400, placeholder='搜索标题、日期或文件名', bg=UK.C.N0)
+        search_row.pack(fill='x', pady=(0, 12))
+        search = UK.SearchBox(search_row, width=360, placeholder='搜索标题、日期或文件名', bg=UK.C.N0)
         search.pack(side='left')
+        status = tk.Label(search_row, text='正在读取本地记录…', bg=UK.C.N0, fg=UK.C.SUB,
+                          font=UK.F_SMALL, anchor='e', justify='right', wraplength=300)
+        status.pack(side='right')
         if state['query']:
             search._ph = False
             search.entry.configure(fg=UK.C.TEXT)
             search.var.set(state['query'])
         frame = tk.Frame(b, bg=UK.C.N0)
         frame.pack(fill='both',expand=True)
-        listing = tk.Listbox(frame, height=3, selectmode='extended', exportselection=False,
-                             bg=UK.C.N100, fg=UK.C.TEXT, font=UK.F_UI, bd=0, highlightthickness=0,
-                             selectbackground=UK.C.A100, selectforeground=UK.C.TEXT, activestyle='none')
+        # 两行式列表：标题一行，时间/条数/时长一行，文件尾号靠右；可多选。
+        listing = UK.RowList(frame, bg=UK.C.N0)
+        sb = UK.ThinScroll(frame, listing, bg=UK.C.N0)
+        sb.pack(side='right', fill='y', padx=(6, 0))
         listing.pack(side='left', fill='both', expand=True)
-        sb = tk.Scrollbar(frame, command=listing.yview)
-        sb.pack(side='right', fill='y')
-        listing.configure(yscrollcommand=sb.set)
         def update_status():
             if not state['loaded']:
                 status.configure(text='正在读取本地记录…')
@@ -224,11 +222,11 @@ def open_history(app):
             if not state['all'] and state['errors']:
                 text = '无法读取会议记录，请检查文件后刷新。'
             elif not state['all']:
-                text = '暂无会议记录。开始会议后，记录会自动保存。'
+                text = '暂无会议记录'
             elif not count:
                 text = '没有找到匹配的会议，请修改或清空搜索条件。'
             else:
-                text = f'{count} 场' + (f' · 已选择 {selected_count} 场' if selected_count else ' · Ctrl 多选')
+                text = f'{count} 场' + (f' · 已选择 {selected_count} 场' if selected_count else '')
             if state['errors']:
                 text += f' · {len(state["errors"])} 个文件无法读取，可尝试刷新'
             # 删除结果必须活过一次刷新：删完总要重读列表，先写 status 再刷新
@@ -260,16 +258,19 @@ def open_history(app):
             state['selected'].intersection_update(str(s.path) for s in state['visible'])
             listing.delete(0,'end')
             for i, s in enumerate(state['visible']):
-                listing.insert('end', row_text(s))
+                meta = [s.started_label, f'{s.count} 条']
+                if s.duration_label:
+                    meta.append(s.duration_label)
+                if s.legacy:
+                    meta.append('旧版')
+                tail = s.path.stem[-12:] if s.path.suffix.lower() == '.sqlite3' else ''
+                listing.insert('end', row_text(s), title=s.title or '未命名会议',
+                               meta=' · '.join(meta), aside=tail)
                 if str(s.path) in state['selected']:
                     listing.selection_set(i)
             listing.yview_moveto(state['scroll'])
             update_status()
         search.on_change = filter_list
-        def clear_search():
-            search._show_placeholder()
-            filter_list()
-        UK.Pill(search_row, '清除搜索', clear_search, kind='ghost', bg=UK.C.N0).pack(side='left', padx=8)
         def on_selection(_event):
             # 用户一动选择，上一次的删除结果就不再是当前语境，撤掉。
             # （程序里 selection_set 不会触发 <<ListboxSelect>>，所以刷新列表
@@ -308,7 +309,8 @@ def open_history(app):
                 state['all'] = [session if s.path == session.path else s for s in state['all']]
                 filter_list()
             rename_meeting(app, sessions[0], renamed)
-        UK.Pill(search_row, '重命名', rename_selected, kind='secondary', bg=UK.C.N0).pack(side='left', padx=8)
+        UK.Pill(search_row, '重命名', rename_selected, kind='ghost', bg=UK.C.N0,
+                icon='edit', tooltip='F2').pack(side='left', padx=8)
         listing.bind('<F2>', lambda e: rename_selected())
         def read(action):
             sessions = selected()
@@ -411,17 +413,21 @@ def open_history(app):
         app._sheet_footer.pack(side='bottom',fill='x',padx=24,pady=(8,12))
         row = tk.Frame(app._sheet_footer,bg=UK.C.N50)
         row.pack(fill='x')
-        for text, action, kind in [('打开记录','view','tint'), ('导出 / 合并所选','export','primary'), ('续接所选会议','resume','ghost')]:
-            UK.Pill(row,text,lambda a=action: read(a),kind=kind).pack(side='left',padx=(0,12))
-        UK.Pill(row,'删除',do_delete,kind='ghost').pack(side='left',padx=(0,12))
+        # 1000px 最小窗口下整排要放得下：只给主操作配图标。
+        for text, action, kind, icon in [('打开记录','view','tint',None),
+                                         ('导出 / 合并所选','export','primary','export'),
+                                         ('续接所选会议','resume','ghost',None)]:
+            UK.Pill(row,text,lambda a=action: read(a),kind=kind,icon=icon).pack(side='left',padx=(0,10))
+        UK.Pill(row,'删除',do_delete,kind='danger',icon='trash',
+                tooltip='移入系统回收站，可还原').pack(side='left',padx=(0,10))
         def open_records_folder():
             try:
                 CAPTION_DIR.mkdir(parents=True, exist_ok=True)
                 os.startfile(str(CAPTION_DIR.resolve()))
             except OSError as exc:
                 app._notice('无法打开记录文件夹：' + str(exc))
-        UK.Pill(row,'刷新',refresh,kind='ghost').pack(side='right')
-        UK.Pill(row,'打开记录文件夹',open_records_folder,kind='secondary').pack(side='right',padx=(0,12))
+        UK.Pill(row,'刷新',refresh,kind='ghost',icon='refresh').pack(side='right')
+        UK.Pill(row,'打开记录文件夹',open_records_folder,kind='secondary').pack(side='right',padx=(0,8))
         listing.bind('<Double-Button-1>',lambda e: read('view'))
         refresh()
     app._show_sheet('历史会议', build)
@@ -488,8 +494,8 @@ def view_history(app, session, records):
         meta.pack(anchor='w', pady=(4, 0))
 
         def wrap_title(event):
-            title_label.configure(wraplength=max(80,event.width))
-            meta.configure(wraplength=max(80,event.width))
+            title_label.configure(wraplength=max(80,UK.lpx(event.width)))
+            meta.configure(wraplength=max(80,UK.lpx(event.width)))
         title_box.bind('<Configure>',wrap_title)
 
         # ---------------- 检索 + 显示模式 ----------------
@@ -561,6 +567,11 @@ def view_history(app, session, records):
             readout.configure(
                 text=f'{len(chosen)} 条 · 第 {state["page"] + 1}/{total} 页'
                      + (f' · 已改 {state["dirty"]} 条' if state['dirty'] else ''))
+            # 只有一页时翻页按钮没有意义，整行隐藏
+            if total > 1 and not pager.winfo_manager():
+                pager.pack(side='left')
+            elif total <= 1 and pager.winfo_manager():
+                pager.pack_forget()
             meta.configure(text=f'{len(state["records"])} 条 · {session.started.replace("T", " ")}'
                                + (' · 旧版 Markdown（只读）' if session.legacy else ''))
 
@@ -604,13 +615,13 @@ def view_history(app, session, records):
                         side='right', padx=(0, 10))
             UK.Pill(actions, '取消补译' if MT.active_job(app, session.path) else '补译',
                     backfill, kind='tint').pack(side='right', padx=(0, 10))
+            UK.Pill(actions, '重命名', lambda: rename_meeting(app, session, renamed),
+                    kind='ghost', bg=UK.C.N0, icon='edit').pack(side='right', padx=(0, 6))
         def renamed(value):
             nonlocal session
             session = value
             if title_label.winfo_exists():
                 title_label.configure(text=session.title)
-        UK.Pill(title_box, '重命名', lambda: rename_meeting(app, session, renamed),
-                kind='ghost', bg=UK.C.N0, height=28).pack(anchor='w', pady=(2,0))
 
         def backfill():
             job = MT.active_job(app, session.path)
@@ -678,18 +689,17 @@ def view_history(app, session, records):
         progress.pack(fill='x', pady=(0, 6))
         row = tk.Frame(app._sheet_footer, bg=UK.C.N50)
         row.pack(fill='x')
-        UK.Pill(row, '上一页', lambda: turn(-1), kind='ghost').pack(side='left')
-        UK.Pill(row, '下一页', lambda: turn(1), kind='ghost').pack(side='left', padx=12)
+        pager = tk.Frame(row, bg=UK.C.N50)
+        prev_btn = UK.Pill(pager, '上一页', lambda: turn(-1), kind='ghost')
+        prev_btn.pack(side='left')
+        next_btn = UK.Pill(pager, '下一页', lambda: turn(1), kind='ghost')
+        next_btn.pack(side='left', padx=12)
         failure_button = UK.Pill(row, '查看失败项', lambda: toggle_failures(), kind='ghost')
         def toggle_failures():
             state['failed_only'] = not state['failed_only']
             state['page'] = 0
             failure_button.set_text('显示全部' if state['failed_only'] else '查看失败项')
             paint(reset_scroll=True)
-        # 真正的「返回上一层」，不是再开一个历史列表（旧实现会叠层，
-        # 还把主窗口一起带走了）
-        UK.Pill(row, '返回历史列表', app._close_sheet,
-                kind='tint').pack(side='right')
 
         rebuild_actions()
         readonly(True)

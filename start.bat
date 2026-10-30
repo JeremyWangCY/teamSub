@@ -1,5 +1,5 @@
 @echo off
-rem TeamsSub - Teams live caption reader
+rem TeamSub - Teams live caption reader
 cd /d "%~dp0"
 if not exist ".venv\Scripts\pythonw.exe" (
     echo [ERROR] .venv not found. See debug.bat for details.

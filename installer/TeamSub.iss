@@ -2,7 +2,7 @@
   #define AppVersion "0.1.15"
 #endif
 #ifndef BinaryPath
-  #define BinaryPath "..\dist\TeamsSub.exe"
+  #define BinaryPath "..\dist\TeamSub.exe"
 #endif
 #ifndef UpdateWaitTimeout
   #define UpdateWaitTimeout 90000
@@ -10,16 +10,16 @@
 
 [Setup]
 AppId={{858D2E37-43CC-4A09-89A4-6C925937A582}
-AppName=TeamsSub
+AppName=TeamSub
 AppVersion={#AppVersion}
 VersionInfoVersion={#AppVersion}
 VersionInfoTextVersion={#AppVersion}
-AppPublisher=TeamsSub contributors
-AppPublisherURL=https://github.com/JeremyWangCY/teamsSub
-AppSupportURL=https://github.com/JeremyWangCY/teamsSub/issues
-AppUpdatesURL=https://github.com/JeremyWangCY/teamsSub/releases
-DefaultDirName={%USERPROFILE}\Apps\TeamsSub
-DefaultGroupName=TeamsSub
+AppPublisher=TeamSub contributors
+AppPublisherURL=https://github.com/JeremyWangCY/teamSub
+AppSupportURL=https://github.com/JeremyWangCY/teamSub/issues
+AppUpdatesURL=https://github.com/JeremyWangCY/teamSub/releases
+DefaultDirName={%USERPROFILE}\Apps\TeamSub
+DefaultGroupName=TeamSub
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
@@ -27,14 +27,14 @@ MinVersion=10.0
 DisableProgramGroupPage=yes
 UsePreviousAppDir=yes
 OutputDir=..\dist
-OutputBaseFilename=TeamsSub-Setup-{#AppVersion}
+OutputBaseFilename=TeamSub-Setup-{#AppVersion}
 SetupIconFile=..\teamsub.ico
-UninstallDisplayIcon={app}\TeamsSub.exe
+UninstallDisplayIcon={app}\TeamSub.exe
 LicenseFile=..\LICENSE
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
-AppMutex=Local\TeamsSub_SingleInstance
+AppMutex=Local\TeamSub_SingleInstance
 CloseApplications=no
 RestartApplications=no
 
@@ -47,21 +47,21 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 ; Explicit allowlist: never include local configuration, caches, logs or meetings.
-Source: "{#BinaryPath}"; DestDir: "{app}"; DestName: "TeamsSub.exe"; Flags: ignoreversion
+Source: "{#BinaryPath}"; DestDir: "{app}"; DestName: "TeamSub.exe"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\TeamsSub"; Filename: "{app}\TeamsSub.exe"; WorkingDir: "{app}"
-Name: "{autodesktop}\TeamsSub"; Filename: "{app}\TeamsSub.exe"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{group}\TeamSub"; Filename: "{app}\TeamSub.exe"; WorkingDir: "{app}"
+Name: "{autodesktop}\TeamSub"; Filename: "{app}\TeamSub.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\TeamsSub.exe"; Description: "{cm:LaunchProgram,TeamsSub}"; Flags: nowait postinstall skipifsilent; Check: not IsAutomaticUpdate
+Filename: "{app}\TeamSub.exe"; Description: "{cm:LaunchProgram,TeamSub}"; Flags: nowait postinstall skipifsilent; Check: not IsAutomaticUpdate
 
 ; No UninstallDelete entries: user configuration and meeting records survive uninstall.
 
 [Code]
 const
-  UpdateAppMutex = 'Local\TeamsSub_SingleInstance';
+  UpdateAppMutex = 'Local\TeamSub_SingleInstance';
   SynchronizeAccess = $00100000;
   WaitObject = 0;
   WaitTimeout = $00000102;
@@ -162,24 +162,24 @@ var
   Target: String;
 begin
   Result := True;
-  AutomaticUpdate := ExpandConstant('{param:TeamsSubUpdate|0}') = '1';
+  AutomaticUpdate := ExpandConstant('{param:TeamSubUpdate|0}') = '1';
   if not AutomaticUpdate then
     Exit;
   Result := False;
-  ProcessId := StrToIntDef(ExpandConstant('{param:TeamsSubWaitPid|0}'), 0);
-  ParentProcessId := StrToIntDef(ExpandConstant('{param:TeamsSubWaitParentPid|0}'), 0);
+  ProcessId := StrToIntDef(ExpandConstant('{param:TeamSubWaitPid|0}'), 0);
+  ParentProcessId := StrToIntDef(ExpandConstant('{param:TeamSubWaitParentPid|0}'), 0);
   UpdateDirectory := RemoveBackslashUnlessRoot(ExpandConstant('{param:DIR|}'));
-  UpdateBackup := ExpandConstant('{param:TeamsSubBackup|}');
-  UpdateBackupHash := ExpandConstant('{param:TeamsSubBackupSHA256|}');
+  UpdateBackup := ExpandConstant('{param:TeamSubBackup|}');
+  UpdateBackupHash := ExpandConstant('{param:TeamSubBackupSHA256|}');
   { The app constant is unavailable before wizard initialization; use the explicit DIR. }
   if (ProcessId <= 0) or (ParentProcessId < 0) or (Length(UpdateDirectory) < 3) or
      not ((Copy(UpdateDirectory, 2, 2) = ':\') or (Copy(UpdateDirectory, 1, 2) = '\\')) or
-     (CompareText(ExtractFileName(UpdateBackup), 'TeamsSub.previous.exe') <> 0) or
+     (CompareText(ExtractFileName(UpdateBackup), 'TeamSub.previous.exe') <> 0) or
      (CompareText(ExtractFileDir(UpdateBackup), UpdateDirectory) = 0) or not ValidBackup then begin
     Log('Invalid automatic update parameters or backup; installation cancelled.');
     Exit;
   end;
-  Target := AddBackslash(UpdateDirectory) + 'TeamsSub.exe';
+  Target := AddBackslash(UpdateDirectory) + 'TeamSub.exe';
   if not FileExists(Target) then begin
     Log('Automatic update target does not exist; installation cancelled.');
     Exit;
@@ -218,7 +218,7 @@ begin
     Log('Cannot recover: previous application backup verification failed.');
     Exit;
   end;
-  Target := AddBackslash(UpdateDirectory) + 'TeamsSub.exe';
+  Target := AddBackslash(UpdateDirectory) + 'TeamSub.exe';
   if not CopyFile(UpdateBackup, Target, False) then begin
     Log('Cannot recover the previous application file. The verified backup is retained.');
     Exit;
@@ -236,7 +236,7 @@ begin
   if CurStep = ssPostInstall then
     UpdateInstalled := True;
   if (CurStep = ssDone) and AutomaticUpdate and UpdateInstalled then begin
-    if Exec(ExpandConstant('{app}\TeamsSub.exe'), '', ExpandConstant('{app}'),
+    if Exec(ExpandConstant('{app}\TeamSub.exe'), '', ExpandConstant('{app}'),
             SW_SHOWNORMAL, ewNoWait, ExitCode) then
       Log('Updated application started automatically.')
     else begin

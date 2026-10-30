@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import Mock, patch
 import update_test_support as support      # 必须最先导入：它把仓库根目录放进 sys.path
 import frontend_views as V
+import ui_kit as UK
 import meeting_repository as R
 from caption_store import CaptionStore
 from test_update_settings import GuiTestCase
@@ -190,9 +191,9 @@ class HistoryDeleteGuiTests(GuiTestCase):
         self.addCleanup(patcher.stop)
         note = ""
         self.app.open_history()
-        self.wait_for(lambda: any(isinstance(w, tk.Listbox) and w.size() == 2
+        self.wait_for(lambda: any(isinstance(w, UK.RowList) and w.size() == 2
                                   for w in self.walk(self.app.sheet_layer)))
-        return next(w for w in self.walk(self.app.sheet_layer) if isinstance(w, tk.Listbox))
+        return next(w for w in self.walk(self.app.sheet_layer) if isinstance(w, UK.RowList))
 
     @staticmethod
     def label_texts(case):

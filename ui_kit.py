@@ -1443,38 +1443,52 @@ class Select(tk.Canvas):
         top = self.winfo_toplevel()
         if not self.options:
             return
-        w = max(1, self.winfo_width())
-        h = self.ROW_H * len(self.options) + 8
+        cw = max(1, lpx(self.winfo_width()))
+        n = len(self.options)
         # 画布项里的控件 rootx 不可靠，一律用 place 的 in_ 相对锚点定位
         oy = max(0, lpx(self.winfo_rooty() - top.winfo_rooty()))
-        below = (oy + self.h + 4 + h <= lpx(top.winfo_height())) or oy == 0
+        ox = max(0, lpx(self.winfo_rootx() - top.winfo_rootx()))
+        top_h, top_w = lpx(top.winfo_height()), lpx(top.winfo_width())
+        room_below = top_h - (oy + self.h + 4) - 8
+        room_above = oy - 4 - 8
+        # 选项多、窗口矮时分栏排，弹层不出窗口（语言列表有 13 项）
+        rows_fit = max(1, (max(room_below, room_above) - 8) // self.ROW_H)
+        cols = max(1, min(-(-n // rows_fit), max(1, top_w // cw)))
+        rows = -(-n // cols)
+        h = self.ROW_H * rows + 8
+        w = cw * cols
+        below = h <= room_below or oy == 0 or room_below >= room_above
+        x = min(0, top_w - 8 - (ox + w)) if cols > 1 else 0
+        x = max(-ox, x)
         pop = tk.Canvas(top, width=w, height=h, bg=self.bgcol,
                         highlightthickness=0, bd=0)
-        pop.place(in_=self, x=0, y=(self.h + 4) if below else -(h + 4))
+        pop.place(in_=self, x=x, y=(self.h + 4) if below else -(h + 4))
         # Canvas 的 lift() 是画布项命令，抬升窗口必须直接调 raise
         pop.tk.call("raise", pop._w)
         round_rect(pop, 3.5, 4.5, w - 0.5, h + 1.5, R_POP, fill=C.SHADOW, outline=C.SHADOW)
         round_rect(pop, 1.5, 1.5, w - 1.5, h - 1.5, R_POP, fill=C.N0, outline=C.LINE)
         for i, opt in enumerate(self.options):
-            a = 4 + i * self.ROW_H
+            col, row = divmod(i, rows)
+            x0, x1 = col * cw, (col + 1) * cw
+            a = 4 + row * self.ROW_H
             b = a + self.ROW_H
-            self._rows.append((opt, a, b))
+            self._rows.append((opt, x0, x1, a, b))
             on = opt == self.value
             if on:
-                round_rect(pop, 5, a + 1, w - 5, b - 1, 7,
+                round_rect(pop, x0 + 5, a + 1, x1 - 5, b - 1, 7,
                            fill=C.A50, outline=C.A50)
-            pop.create_text(self.pad + 2, (a + b) / 2,
-                            text=fit_text(opt, self.font, w - self.pad - 34), anchor="w",
+            pop.create_text(x0 + self.pad + 2, (a + b) / 2,
+                            text=fit_text(opt, self.font, cw - self.pad - 34), anchor="w",
                             fill=(C.TEXT if on else C.SUB), font=self.font)
             if on:
-                pop.create_text(w - 10, (a + b) / 2, text="✓", anchor="e",
+                pop.create_text(x1 - 10, (a + b) / 2, text="✓", anchor="e",
                                 fill=C.A500, font=self.font)
         self._pop = pop
         _OPEN_POPS.append(pop)
         self._paint()               # 触发框切换到高亮环状态
 
         def down(e):
-            if not (0 <= e.x < w and any(a <= e.y < b for _, a, b in self._rows)):
+            if not any(x0 <= e.x < x1 and a <= e.y < b for _, x0, x1, a, b in self._rows):
                 self.close()
             return "break"
 
@@ -1482,8 +1496,8 @@ class Select(tk.Canvas):
             if not 0 <= e.x < w:
                 self.close()
                 return "break"
-            for opt, a, b in self._rows:
-                if a <= e.y < b:
+            for opt, x0, x1, a, b in self._rows:
+                if x0 <= e.x < x1 and a <= e.y < b:
                     self.set(opt, notify=True)
                     self.close()
                     break
@@ -1512,6 +1526,256 @@ class Select(tk.Canvas):
         self._paint()
         if notify and self.command:
             self.command(v)
+
+
+class SearchSelect(Select):
+    """带搜索的下拉：展开后顶部是输入框，边打字边筛选，↑↓ 选、回车定。
+
+    hints 是 {选项: 右侧淡色小字}，keywords 是 {选项: 只用来搜的别名}，两者都参与
+    搜索（语言的本族语名、英文名、代码）；pop_w 是展开层的最小宽度。
+    """
+
+    SEARCH_H = 42
+
+    def __init__(self, master, options, value=None, command=None, hints=None,
+                 keywords=None, pop_w=0, **kw):
+        self.hints = dict(hints or {})
+        self.keywords = dict(keywords or {})
+        self.pop_w = pop_w
+        super().__init__(master, options, value=value, command=command, **kw)
+
+    def _open(self):
+        top = self.winfo_toplevel()
+        if not self.options:
+            return
+        w = max(lpx(self.winfo_width()), self.pop_w)
+        oy = max(0, lpx(self.winfo_rooty() - top.winfo_rooty()))
+        ox = max(0, lpx(self.winfo_rootx() - top.winfo_rootx()))
+        top_h, top_w = lpx(top.winfo_height()), lpx(top.winfo_width())
+        room_below = top_h - (oy + self.h + 4) - 8
+        room_above = oy - 4 - 8
+        fit = (max(room_below, room_above) - 8 - self.SEARCH_H) // self.ROW_H
+        visible = int(max(3, min(len(self.options), fit)))
+        h = self.SEARCH_H + visible * self.ROW_H + 8
+        below = h <= room_below or room_below >= room_above
+        x = max(-ox, min(0, top_w - 8 - (ox + w)))
+        pop = tk.Canvas(top, width=w, height=h, bg=self.bgcol, highlightthickness=0, bd=0)
+        pop.place(in_=self, x=x, y=(self.h + 4) if below else -(h + 4))
+        pop.tk.call("raise", pop._w)
+        round_rect(pop, 7, 7, w - 7, self.SEARCH_H - 3, 8, fill=C.N100, outline=C.N100)
+        icon_x, icon_y = 20, (self.SEARCH_H + 4) / 2
+        pop.create_oval(icon_x - 5, icon_y - 5, icon_x + 3, icon_y + 3, outline=C.SUB, width=1.5)
+        pop.create_line(icon_x + 2.5, icon_y + 2.5, icon_x + 6, icon_y + 6, fill=C.SUB,
+                        width=1.5, capstyle="round")
+        query = tk.StringVar()
+        entry = tk.Entry(pop, textvariable=query, relief="flat", bd=0, highlightthickness=0,
+                         bg=C.N100, fg=C.TEXT, insertbackground=C.TEXT, font=self.font)
+        entry.place(x=32, y=12, width=w - 46, height=self.SEARCH_H - 20)
+        self._search = entry
+        st = {"matches": list(self.options), "offset": 0,
+              "active": max(0, self.options.index(self.value)) if self.value in self.options else 0}
+
+        def paint_rows():
+            pop.delete("rows")
+            self._rows = []
+            matches, off = st["matches"], st["offset"]
+            # 弹层高度随筛选结果收缩，不留一大片空白
+            ph = self.SEARCH_H + max(1, min(visible, len(matches))) * self.ROW_H + 8
+            if st.get("h") != ph:
+                st["h"] = ph
+                pop.configure(height=ph)
+                if not below:
+                    pop.place_configure(y=-(ph + 4))
+                pop.delete("frame")
+                round_rect(pop, 3.5, 4.5, w - 0.5, ph + 1.5, R_POP, fill=C.SHADOW,
+                           outline=C.SHADOW, tags="frame")
+                round_rect(pop, 1.5, 1.5, w - 1.5, ph - 1.5, R_POP, fill=C.N0,
+                           outline=C.LINE, tags="frame")
+                pop.tag_lower("frame")
+            if not matches:
+                pop.create_text(self.pad + 2, self.SEARCH_H + 4 + self.ROW_H / 2, text="无匹配",
+                                anchor="w", fill=C.SUB, font=self.font, tags="rows")
+                return
+            for k, opt in enumerate(matches[off:off + visible]):
+                a = self.SEARCH_H + 4 + k * self.ROW_H
+                b = a + self.ROW_H
+                self._rows.append((opt, 0, w, a, b))
+                on, act = opt == self.value, off + k == st["active"]
+                if on or act:
+                    round_rect(pop, 5, a + 1, w - 5, b - 1, 7, tags="rows",
+                               fill=C.A50 if on else C.N100, outline=C.A50 if on else C.N100)
+                hint = self.hints.get(opt, "")
+                right = w - (28 if on else 12)
+                if hint:
+                    pop.create_text(right, (a + b) / 2, anchor="e", tags="rows", fill=C.SUB,
+                                    text=fit_text(hint, F_MINI, w / 2 - 20), font=F_MINI)
+                pop.create_text(self.pad + 2, (a + b) / 2, anchor="w", tags="rows",
+                                text=fit_text(opt, self.font, w / 2 if hint else w - 44),
+                                fill=C.TEXT if on or act else C.SUB, font=self.font)
+                if on:
+                    pop.create_text(w - 10, (a + b) / 2, text="✓", anchor="e", tags="rows",
+                                    fill=C.A500, font=self.font)
+
+        def reveal():
+            act, off = st["active"], st["offset"]
+            if act < off:
+                st["offset"] = act
+            elif act >= off + visible:
+                st["offset"] = act - visible + 1
+            paint_rows()
+
+        def refilter(*_):
+            q = query.get().strip().lower()
+            st["matches"] = [o for o in self.options
+                             if q in " ".join((o, self.hints.get(o, ""),
+                                               self.keywords.get(o, ""))).lower()]
+            st["offset"] = st["active"] = 0
+            paint_rows()
+
+        def move(step):
+            if st["matches"]:
+                st["active"] = (st["active"] + step) % len(st["matches"])
+                reveal()
+            return "break"
+
+        def choose(_=None):
+            if st["matches"]:
+                self.set(st["matches"][st["active"]], notify=True)
+            self.close()
+            return "break"
+
+        def wheel(e):
+            limit = max(0, len(st["matches"]) - visible)
+            st["offset"] = max(0, min(limit, st["offset"] - int(e.delta / 120)))
+            paint_rows()
+            return "break"
+
+        def hover(e):
+            for k, (_, x0, x1, a, b) in enumerate(self._rows):
+                if a <= e.y < b and st["active"] != st["offset"] + k:
+                    st["active"] = st["offset"] + k
+                    paint_rows()
+                    break
+
+        def down(e):
+            inside = 0 <= e.x < w and 0 <= e.y < st["h"]
+            if not inside:
+                self.close()
+            return "break"
+
+        def up(e):
+            for opt, x0, x1, a, b in self._rows:
+                if x0 <= e.x < x1 and a <= e.y < b:
+                    self.set(opt, notify=True)
+                    self.close()
+                    break
+            return "break"
+
+        query.trace_add("write", refilter)
+        reveal()
+        self._pop = pop
+        _OPEN_POPS.append(pop)
+        self._paint()
+        pop.bind("<Button-1>", down, add="+")
+        pop.bind("<ButtonRelease-1>", up)
+        pop.bind("<Motion>", hover)
+        for wd in (pop, entry):
+            wd.bind("<MouseWheel>", wheel)
+        entry.bind("<Down>", lambda e: move(1))
+        entry.bind("<Up>", lambda e: move(-1))
+        entry.bind("<Return>", choose)
+        entry.bind("<Escape>", lambda e: (self.close(), "break")[1])
+        try:
+            pop.grab_set()
+            entry.focus_set()
+        except Exception:
+            pass
+
+
+# ------------------------------------------------------------------ 翻译方向
+class DirectionPicker(tk.Frame):
+    """翻译方向：[互译|译成] + 语言下拉。
+
+    互译显示「A ⇄ B」两个下拉；译成只显示一个目标语言下拉。
+    langs 是 {代码: 显示名}（有序），hints / keywords 是 {代码: 别名}，见 SearchSelect；
+    command(mode, a, b) 在任一变化后调用；
+    mode 为 "auto" 或目标语言代码，与 translator.Config.mode 同义。
+    """
+
+    def __init__(self, master, langs, mode="auto", pair=("zh", "en"), command=None,
+                 bg=None, select_w=96, height=36, hints=None, keywords=None):
+        self.bgcol = bg or _parent_bg(master)
+        super().__init__(master, bg=self.bgcol)
+        self.langs = dict(langs)
+        self._code = {name: code for code, name in self.langs.items()}
+        self.command = command
+        names = list(self.langs.values())
+        hints = {self.langs[c]: h for c, h in (hints or {}).items() if c in self.langs}
+        keywords = {self.langs[c]: k for c, k in (keywords or {}).items() if c in self.langs}
+        self.seg = Segmented(self, ["互译", "译成"], command=self._on_seg,
+                             height=height, bg=self.bgcol)
+        self.seg.pack(side="left")
+        self.sel_a = SearchSelect(self, names, command=lambda v: self._on_lang("a", v),
+                                  width=select_w, height=height, bg=self.bgcol, font=F_SMALL,
+                                  hints=hints, keywords=keywords, pop_w=200)
+        self.arrow = tk.Label(self, text="⇄", bg=self.bgcol, fg=C.SUB, font=F_SMALL)
+        self.sel_b = SearchSelect(self, names, command=lambda v: self._on_lang("b", v),
+                                  width=select_w, height=height, bg=self.bgcol, font=F_SMALL,
+                                  hints=hints, keywords=keywords, pop_w=200)
+        self.set(mode, pair)
+
+    def set(self, mode, pair):
+        a, b = pair
+        self.a = a if a in self.langs else next(iter(self.langs))
+        self.b = b if b in self.langs else self.a
+        self.mode = mode if mode in self.langs else "auto"
+        self.target = self.mode if self.mode != "auto" else self.a
+        self._layout()
+
+    def get(self):
+        return self.mode, self.a, self.b
+
+    def _layout(self):
+        auto = self.mode == "auto"
+        self.seg.set(0 if auto else 1)
+        for wd in (self.sel_a, self.arrow, self.sel_b):
+            wd.pack_forget()
+        if auto:
+            self.sel_a.set(self.langs[self.a])
+            self.sel_b.set(self.langs[self.b])
+            self.sel_a.pack(side="left", padx=(8, 0))
+            self.arrow.pack(side="left", padx=4)
+        else:
+            self.sel_b.set(self.langs[self.target])
+            self.sel_b.pack(side="left", padx=(8, 0))
+            return
+        self.sel_b.pack(side="left")
+
+    def _on_seg(self, label):
+        self.mode = "auto" if label == "互译" else self.target
+        self._layout()
+        self._notify()
+
+    def _on_lang(self, which, name):
+        code = self._code.get(name)
+        if code is None:
+            return
+        if self.mode != "auto":
+            self.target = self.mode = code
+        elif which == "a":
+            if code == self.b:          # 选成同一种就对调，互译总是两种语言
+                self.b = self.a
+            self.a = code
+        else:
+            if code == self.a:
+                self.a = self.b
+            self.b = code
+        self._layout()
+        self._notify()
+
+    def _notify(self):
+        if self.command:
+            self.command(*self.get())
 
 
 # ------------------------------------------------------------------ 模式切换

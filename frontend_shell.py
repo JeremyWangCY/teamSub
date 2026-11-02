@@ -20,10 +20,33 @@ def fit_initial_window(root):
     root.minsize(min(px(1000), usable_width), min(px(640), usable_height))
     root.geometry(f'{min(px(1280), usable_width)}x{min(px(820), usable_height)}')
 
-def refresh_topic(self):
+def lang_names():
+    """{语言代码: 中文名}；翻译模块不可用时只留中英两项，控件照常能画。"""
+    try:
+        from translator import LANG_NAME
+        return LANG_NAME
+    except Exception:
+        return {"zh": "中文", "en": "英语"}
+
+
+def lang_hints():
+    """语言选择器的 (右侧小字, 搜索别名)；翻译模块不可用时都为空。"""
+    try:
+        from translator import LANG_HINT, LANG_KEYS
+        return dict(hints=LANG_HINT, keywords=LANG_KEYS)
+    except Exception:
+        return {}
+
+
+def tcfg_pair(tcfg):
+    return (getattr(tcfg, "lang_a", "zh"), getattr(tcfg, "lang_b", "en"))
+
+
+def topic_choices(tcfg):
+    """{显示名: 主题 key}；重名的主题在名字后标上 key 以便区分。"""
     from collections import Counter
     from translator import all_topics
-    topics = all_topics(self.tcfg)
+    topics = all_topics(tcfg)
     counts = Counter(t.get('name') or k for k, t in topics.items())
     choices = {}
     for key, topic in topics.items():
@@ -32,6 +55,11 @@ def refresh_topic(self):
         while label in choices:
             label += f' [{key}]'
         choices[label] = key
+    return choices
+
+
+def refresh_topic(self):
+    choices = topic_choices(self.tcfg)
     self._topic_choices = choices
     select = self.topic_select
     select.options = list(choices)
@@ -140,10 +168,10 @@ def build(self):
     self.search = UK.SearchBox(bar, width=240, placeholder="搜索原文、译文或发言人",
                                on_change=self.apply_search, bg=UK.C.N50)
     self.search.pack(side="left")
-    self.seg = UK.Segmented(bar, ["双向互译", "全部译中", "全部译英"],
-                            command=self.on_mode_pick, bg=UK.C.N50)
+    self.seg = UK.DirectionPicker(bar, lang_names(), self.tcfg.mode, tcfg_pair(self.tcfg),
+                                  command=self.on_mode_pick, bg=UK.C.N50, select_w=88,
+                                  **lang_hints())
     self.seg.pack(side="right")
-    self.seg.set({"auto": 0, "zh": 1, "en": 2}.get(self.tcfg.mode, 0))
 
     # 常驻上下文只读取已保存的配置，浏览设置草稿不会改变这里。
     topic_slot = tk.Frame(bar, bg=UK.C.N50, width=1, height=36)
@@ -151,7 +179,7 @@ def build(self):
     topic_slot.pack_propagate(False)
     tk.Label(topic_slot, text="翻译主题", font=UK.F_MINI, bg=UK.C.N50,
              fg=UK.C.SUB).pack(side="left", padx=(0, 8))
-    self.topic_select = UK.Select(topic_slot, [], command=self.on_topic_pick,
+    self.topic_select = UK.SearchSelect(topic_slot, [], command=self.on_topic_pick, pop_w=220,
                                    height=36, width=120, bg=UK.C.N50, font=UK.F_SMALL)
     self.topic_select.pack(side="left", fill="x", expand=True)
     refresh_topic(self)

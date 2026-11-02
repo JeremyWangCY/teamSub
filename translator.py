@@ -85,7 +85,7 @@ def _unprotect(text):
 TOPICS = {
     "general": {
         "name": "通用会议",
-        "brief": "通用商务/技术会议，中英混说，口语化，有重复和口头语。",
+        "brief": "通用商务/技术会议，可能多语混说，口语化，有重复和口头语。",
         "glossary": "",
     },
     "auto_styling": {
@@ -176,33 +176,140 @@ def normalize_text(text: str) -> str:
     return t
 
 
-def detect_lang(text: str) -> str:
-    """脚本级语言判定：零成本、零延迟、结果稳定。
+# 支持的语言：代码 → 中文名、本族语名、各引擎代码、目标语风格。
+# 风格一句话写给模型看，只写「译成这种语言时该用什么口吻」，不写语言常识。
+LANGS = {
+    "zh": dict(english="Chinese", name="中文", native="简体中文", deepl="ZH-HANS", azure="zh-Hans",
+               style="简体中文，中国大陆通行说法。"),
+    "en": dict(english="English", name="英语", native="English", deepl="EN-US", azure="en",
+               style="Natural spoken English."),
+    "ja": dict(english="Japanese", name="日语", native="日本語", deepl="JA", azure="ja",
+               style="自然な話し言葉、です・ます調。"),
+    "ko": dict(english="Korean", name="韩语", native="한국어", deepl="KO", azure="ko",
+               style="자연스러운 구어체 존댓말(해요체)."),
+    "fr": dict(english="French", name="法语", native="Français", deepl="FR", azure="fr",
+               style="Français parlé naturel, vouvoiement."),
+    "de": dict(english="German", name="德语", native="Deutsch", deepl="DE", azure="de",
+               style="Natürliches gesprochenes Deutsch, Sie-Form."),
+    "es": dict(english="Spanish", name="西班牙语", native="Español", deepl="ES", azure="es",
+               style="Español neutro y natural."),
+    "pt": dict(english="Portuguese", name="葡萄牙语", native="Português", deepl="PT-BR", azure="pt",
+               style="Português do Brasil, natural."),
+    "ru": dict(english="Russian", name="俄语", native="Русский", deepl="RU", azure="ru",
+               style="Естественный разговорный русский."),
+    "it": dict(english="Italian", name="意大利语", native="Italiano", deepl="IT", azure="it",
+               style="Italiano parlato naturale."),
+    "ar": dict(english="Arabic", name="阿拉伯语", native="العربية", deepl="AR", azure="ar",
+               style="العربية الفصحى المبسطة."),
+    "th": dict(english="Thai", name="泰语", native="ไทย", deepl="TH", azure="th",
+               style="ภาษาไทยที่เป็นธรรมชาติและสุภาพ"),
+    "vi": dict(english="Vietnamese", name="越南语", native="Tiếng Việt", deepl="VI", azure="vi",
+               style="Tiếng Việt tự nhiên, lịch sự."),
+}
+LANG_NAME = {code: v["name"] for code, v in LANGS.items()}
+# 语言选择器：右侧淡色显示本族语名；英文名和代码只用来搜
+LANG_HINT = {code: v["native"] for code, v in LANGS.items()}
+LANG_KEYS = {code: f'{v["english"]} {code}' for code, v in LANGS.items()}
+LATIN_LANGS = ("en", "fr", "de", "es", "pt", "it", "vi")
 
-    规则：以 CJK 字数与拉丁词数加权占比判定；一个英文词的信息量约等于
-    1.6 个汉字，因此分母用 lat*1.6 归一。阈值 0.25 偏向判为中文——
-    中英混说场景里"带英文术语的中文句子"远比"带中文词的英文句子"常见。
+KANA_RE = re.compile(r"[\u3040-\u30ff\u31f0-\u31ff]")
+HANGUL_RE = re.compile(r"[\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]")
+THAI_RE = re.compile(r"[\u0e00-\u0e7f]")
+ARABIC_RE = re.compile(r"[\u0600-\u06ff\u0750-\u077f]{2,}")
+CYRILLIC_RE = re.compile(r"[\u0400-\u04ff]{2,}")
+LATIN_WORD_RE = re.compile(r"[A-Za-z\u00c0-\u024f\u1e00-\u1eff']{2,}")
+VI_RE = re.compile(r"[ăđơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ]", re.I)
+# 拉丁字母语言靠高频虚词 + 特征字母区分；只求「会议口语里够用」，不做通用语种识别
+STOPWORDS = {
+    "en": set("the and is are to of you we it that this what have will can not do for with "
+              "on be i so just yeah okay".split()),
+    "fr": set("le la les des est et je nous vous pas une un que qui pour dans sur ce c'est "
+              "avec il elle on mais oui".split()),
+    "de": set("der die das und ist nicht ich wir sie ein eine zu mit auf es den dem auch "
+              "wie aber ja noch".split()),
+    "es": set("el la los las es y que de no por para con una un del lo se está pero como "
+              "sí muy".split()),
+    "pt": set("o a os as é e que não de do da para com um uma por em você isso mas "
+              "sim muito".split()),
+    "it": set("il lo la gli è e che non di per con un una del della sono questo ma ci "
+              "sì molto".split()),
+}
+ACCENTS = {"es": "ñ¿¡", "pt": "ãõ", "de": "ßäöü", "fr": "œêâîûùëç", "it": "ìò"}
+
+
+def _latin_lang(text: str, prefer=()) -> str:
+    """拉丁字母句子是哪种语言。证据不足时按 prefer（当前互译的语言）兜底。"""
+    if len(VI_RE.findall(text)) >= 2:
+        return "vi"
+    words = [w.lower() for w in LATIN_WORD_RE.findall(text)] + \
+            [w.lower() for w in re.findall(r"\b[aeoyiàáéèòóíúç]\b", text, re.I)]
+    low = text.lower()
+    score = {code: sum(w in stop for w in words) for code, stop in STOPWORDS.items()}
+    for code, chars in ACCENTS.items():
+        score[code] += 2 * sum(low.count(ch) for ch in chars)
+    best = max(score.values())
+    latin_prefer = [c for c in prefer if c in LATIN_LANGS]
+    if best == 0:
+        return latin_prefer[0] if latin_prefer else "en"
+    top = [code for code, value in score.items() if value == best]
+    for code in latin_prefer:               # 并列时偏向本场互译的那种语言
+        if code in top:
+            return code
+    return "en" if "en" in top else top[0]
+
+
+def detect_lang(text: str, prefer=()) -> str:
+    """文字级语言判定：零成本、零延迟、结果稳定。
+
+    先按文字系统分：假名 → 日语，谚文 → 韩语，泰文、阿拉伯文、西里尔文各自
+    对应，只有汉字 → 中文；拉丁字母再用虚词与特征字母区分（见 _latin_lang）。
+
+    混说时以非拉丁文字的字数与拉丁词数加权占比判定：一个英文词的信息量约
+    等于 1.6 个汉字，因此分母用 lat*1.6 归一。阈值 0.25 偏向非拉丁语言——
+    「带英文术语的中文句子」远比「带中文词的英文句子」常见。
+    prefer 是当前互译的两种语言，只用来给证据不足的拉丁句子兜底。
     """
     t = ZW_RE.sub("", text or "")
-    cjk = len(CJK_RE.findall(t))
-    lat = len(LATIN_RE.findall(t))
-    if cjk == 0:
-        return "en"
-    if lat == 0:
-        return "zh"
-    return "zh" if cjk / (cjk + lat * 1.6) >= 0.25 else "en"
+    han = len(CJK_RE.findall(t))
+    kana = len(KANA_RE.findall(t))
+    scores = {
+        "ja": kana + han if kana else 0,
+        "zh": han if not kana else 0,
+        "ko": len(HANGUL_RE.findall(t)),
+        "th": len(THAI_RE.findall(t)) / 2.5,     # 泰文不分词，约 2.5 个字符一个词
+        "ar": len(ARABIC_RE.findall(t)) * 1.6,
+        "ru": len(CYRILLIC_RE.findall(t)) * 1.6,
+    }
+    other, weight = max(scores.items(), key=lambda kv: kv[1])
+    lat = len(LATIN_WORD_RE.findall(t))
+    if weight == 0:
+        return _latin_lang(t, prefer) if lat else (next(iter(prefer), "en"))
+    if lat == 0 or weight / (weight + lat * 1.6) >= 0.25:
+        return other
+    return _latin_lang(t, prefer)
 
 
-def decide_target(src: str, mode: str):
-    """返回目标语言；None 表示无需翻译（已经是目标语言）。"""
-    if mode == "zh":
-        return None if src == "zh" else "zh"
-    if mode == "en":
-        return None if src == "en" else "en"
-    return "en" if src == "zh" else "zh"        # auto：双向互译
+def decide_target(src: str, mode: str, pair=("zh", "en")):
+    """返回目标语言；None 表示无需翻译（已经是目标语言）。
+
+    mode 为 auto 时在 pair 两种语言间互译：A 说的译成 B，B 说的译成 A，
+    第三种语言（会上偶尔冒出来的）译成 A——A 是用户自己的语言。
+    mode 为语言代码时，一律译成该语言。
+    """
+    if mode in LANGS:
+        return None if src == mode else mode
+    a, b = pair
+    if a == b:
+        return None if src == a else a
+    if src == a:
+        return b
+    return a
 
 
-LANG_NAME = {"zh": "中文", "en": "English"}
+def direction_label(mode: str, pair=("zh", "en")) -> str:
+    if mode in LANGS:
+        return "全部译成" + LANG_NAME[mode]
+    return f"{LANG_NAME.get(pair[0], pair[0])} ⇄ {LANG_NAME.get(pair[1], pair[1])}"
 
 
 # ---------------------------------------------------------------- 译文质检
@@ -309,7 +416,7 @@ def is_translatable(text: str) -> bool:
     t = normalize_text(text)
     if len(t) < 2:
         return False
-    if not re.search(r"[A-Za-z\u4e00-\u9fff]", t):
+    if not re.search(r"[^\W\d_]", t):        # 至少有一个文字（任意语种）
         return False
     return True
 
@@ -395,7 +502,9 @@ class Config:
     model: str = "deepseek-chat"
     api_key: str = ""
     azure_region: str = ""
-    mode: str = "auto"                      # auto | zh | en
+    mode: str = "auto"                      # auto（lang_a ⇄ lang_b 互译）| 语言代码（全部译成该语言）
+    lang_a: str = "zh"                      # 互译的我方语言；第三种语言也译成它
+    lang_b: str = "en"                      # 互译的对方语言
     reasoning: str = "auto"                 # 思考强度：auto | off | low | medium | high
     reasoning_field: str = ""               # 上游实际接受的字段名（探测后记住）
     reading_size: int = 12
@@ -403,7 +512,7 @@ class Config:
     theme: str = "light"                   # light | dark（界面外观）
     float_bar: bool = False                 # 悬浮字幕窗开启
     float_on_min: bool = False              # 主窗口最小化时自动切悬浮窗
-    float_prev: int = 1                     # 悬浮窗上方保留几条上一句（0 = 只看当前句）
+    float_prev: int = 1                     # 旧配置字段：悬浮窗现在固定滚动保留最近 40 条
     float_w: int = 460                      # 悬浮条宽度（可拖拽，记住上次尺寸）
     float_h: int = 0                        # 悬浮条高度；0 = 按内容自适应
     meeting_mode: str = "teams"             # 会议模式 key（见 modes.py）
@@ -537,6 +646,14 @@ class Config:
                         self.topic_custom.strip()])
         return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:8]
 
+    def pair(self) -> tuple:
+        a = self.lang_a if self.lang_a in LANGS else "zh"
+        b = self.lang_b if self.lang_b in LANGS else "en"
+        return a, b
+
+    def direction(self) -> str:
+        return direction_label(self.mode, self.pair())
+
     def engine_id(self) -> str:
         return f"{self.engine}:{self.model or self.base_url}"
 
@@ -628,15 +745,22 @@ class OpenAICompatProvider(Provider):
     """OpenAI /chat/completions 协议，覆盖 DeepSeek、Qwen、Kimi、GLM、OpenAI、Azure OpenAI 等。"""
     name = "openai"
 
-    def _sys_prompt(self, tgt):
+    def _sys_prompt(self, tgt, src=None):
         # 提示词按「准确优先、其次省 token」来写：
         #   - 硬规则逐条列清（数字/专名/JSON 形状），模型不用猜；
         #   - 每条都说明「为什么」，遵守率明显高于干巴巴的命令；
         #   - 不复述同一要求（旧版「不要翻译/不要复述/不要写名字」是同义三连）。
         #     系统提示词每次请求都要重发，冗余直接等于 token 成本和首字延迟。
+        lang = LANGS.get(tgt, LANGS["en"])
+        source = ""
+        if src in LANGS and src != tgt:
+            source = (f"原文多为{LANG_NAME[src]}；个别条目若是别的语言，按实际语言理解，"
+                      f"同样译成{lang['name']}。\n")
         base = (
-            "你是专业的会议同声传译引擎，为实时会议做中英互译。\n"
-            f"把每条 item 的 text 译成{LANG_NAME[tgt]}。\n"
+            "你是专业的会议同声传译引擎，为多语种实时会议做口译。\n"
+            f"把每条 item 的 text 译成{lang['name']}（{lang['native']}）。\n"
+            + source +
+            f"目标语言口吻：{lang['style']}\n"
             "\n## 硬规则（违反即视为失败）\n"
             "1. 数字、单位、型号、代号、缩写一律照抄，不换算、不改写"
             "（它们往往是唯一的验收依据）；\n"
@@ -696,7 +820,7 @@ class OpenAICompatProvider(Provider):
             "temperature": 0,
             "stream": False,
             "messages": [
-                {"role": "system", "content": self._sys_prompt(tgt)},
+                {"role": "system", "content": self._sys_prompt(tgt, src)},
                 {"role": "user", "content": json.dumps({"items": items}, ensure_ascii=False)},
             ],
         }
@@ -761,9 +885,8 @@ class DeepLProvider(Provider):
         url = self.cfg.base_url or "https://api-free.deepl.com/v2/translate"
         if "/v2/translate" not in url:
             url = url.rstrip("/") + "/v2/translate"
-        payload = {"text": texts,
-                   "target_lang": "ZH" if tgt == "zh" else "EN",
-                   "source_lang": "ZH" if src == "zh" else "EN"}
+        # 不传 source_lang，由 DeepL 自己识别：拉丁字母语种之间本地判定可能出错
+        payload = {"text": texts, "target_lang": LANGS[tgt]["deepl"]}
         data = self._post(url, payload,
                           {"Authorization": f"DeepL-Auth-Key {self.cfg.api_key}"},
                           self.cfg.timeout_s)
@@ -780,8 +903,8 @@ class AzureProvider(Provider):
         base = (self.cfg.base_url or "").rstrip("/")
         if not base:
             raise PermanentError("未配置 Azure 端点")
-        m = {"zh": "zh-Hans", "en": "en"}
-        url = (f"{base}/translate?api-version=3.0&from={m[src]}&to={m[tgt]}")
+        # 不传 from，由 Azure 自动识别原文语种（理由同 DeepL）
+        url = f"{base}/translate?api-version=3.0&to={LANGS[tgt]['azure']}"
         headers = {"Ocp-Apim-Subscription-Key": self.cfg.api_key}
         if self.cfg.azure_region:
             headers["Ocp-Apim-Subscription-Region"] = self.cfg.azure_region
@@ -923,8 +1046,9 @@ class TranslationService:
         if not is_translatable(text):
             self.on_result(rid, "", {"status": "skip", "reason": "无有效文本"})
             return
-        src = detect_lang(text)
-        tgt = decide_target(src, self.cfg.mode)
+        pair = self.cfg.pair()
+        src = detect_lang(text, pair if self.cfg.mode not in LANGS else (self.cfg.mode,))
+        tgt = decide_target(src, self.cfg.mode, pair)
         if tgt is None:
             self.on_result(rid, "", {"status": "skip", "reason": "已是目标语言",
                                      "src": src, "tgt": src})

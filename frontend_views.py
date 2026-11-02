@@ -1,4 +1,5 @@
 """History, reading preferences and export flows, independent from live capture."""
+import copy
 import os
 from pathlib import Path
 import time
@@ -450,6 +451,75 @@ def record_at(txt, x, y):
     return None
 
 
+def ask_backfill(app, missing):
+    """补译前选方向与主题（只作用于这次补译，不改实时翻译的设置）。
+
+    确定返回要覆盖到配置副本上的字段，取消返回 None。
+    """
+    import frontend_shell as FS
+    cfg = app.tcfg
+    root = app.root
+    win = tk.Toplevel(root)
+    win.withdraw()
+    win.title('补译会议记录')
+    win.transient(root)
+    win.resizable(False, False)
+    win.configure(bg=UK.C.N50)
+    result = {'value': None}
+    body = tk.Frame(win, bg=UK.C.N50)
+    body.pack(fill='both', expand=True, padx=20, pady=(18, 16))
+    body.columnconfigure(1, weight=1)
+
+    tk.Label(body, text='方向', bg=UK.C.N50, fg=UK.C.SUB, font=UK.F_SMALL
+             ).grid(row=0, column=0, sticky='w', padx=(0, 12))
+    picker = UK.DirectionPicker(body, FS.lang_names(), cfg.mode, FS.tcfg_pair(cfg),
+                                bg=UK.C.N50, select_w=96, **FS.lang_hints())
+    picker.grid(row=0, column=1, sticky='w')
+    choices = FS.topic_choices(cfg)
+    current = next((label for label, key in choices.items() if key == cfg.topic),
+                   next(iter(choices), ''))
+    tk.Label(body, text='主题', bg=UK.C.N50, fg=UK.C.SUB, font=UK.F_SMALL
+             ).grid(row=1, column=0, sticky='w', padx=(0, 12), pady=(10, 0))
+    topic = UK.SearchSelect(body, list(choices), value=current, width=328, height=36,
+                      bg=UK.C.N50, font=UK.F_SMALL)
+    topic.grid(row=1, column=1, sticky='w', pady=(10, 0))
+    engine = f'{cfg.active_engine_profile or cfg.engine} · {cfg.model or cfg.engine}'
+    tk.Label(body, text=f'{missing} 条 · {engine}', bg=UK.C.N50, fg=UK.C.SUB,
+             font=UK.F_MINI, anchor='w').grid(row=3, column=0, columnspan=2,
+                                             sticky='we', pady=(14, 0))
+    row = tk.Frame(body, bg=UK.C.N50)
+    row.grid(row=4, column=0, columnspan=2, sticky='we', pady=(14, 0))
+    body.rowconfigure(2, weight=1)      # 空出的高度留给下拉层：语言列表展开不出窗
+
+    def ok(_=None):
+        mode, lang_a, lang_b = picker.get()
+        result['value'] = dict(mode=mode, lang_a=lang_a, lang_b=lang_b,
+                               topic=choices.get(topic.get(), cfg.topic))
+        win.destroy()
+
+    def cancel(_=None):
+        win.destroy()
+
+    UK.Pill(row, '开始补译', ok, kind='primary', bg=UK.C.N50).pack(side='right')
+    UK.Pill(row, '取消', cancel, kind='secondary', bg=UK.C.N50).pack(side='right', padx=(0, 8))
+    win.bind('<Return>', ok)
+    win.bind('<Escape>', cancel)
+    win.protocol('WM_DELETE_WINDOW', cancel)
+    win.update_idletasks()
+    height = max(win.winfo_reqheight(), UK.px(330))
+    x = root.winfo_rootx() + (root.winfo_width() - win.winfo_reqwidth()) // 2
+    y = root.winfo_rooty() + (root.winfo_height() - height) // 3
+    win.geometry(f'{win.winfo_reqwidth()}x{height}+{max(0, x)}+{max(0, y)}')
+    win.deiconify()
+    try:
+        win.grab_set()
+    except tk.TclError:
+        pass
+    app._backfill_dialog = win      # 测试与截图脚本从这里拿到弹窗
+    root.wait_window(win)
+    return result['value']
+
+
 def view_history(app, session, records):
     """历史详情：正文画法与实时会议完全一致，默认只读，「编辑」才可改。
 
@@ -638,13 +708,13 @@ def view_history(app, session, records):
             if not app._has_credentials():
                 progress.configure(text='请先在设置中配置翻译服务。', fg=UK.C.RED)
                 return
-            if not messagebox.askyesno('补译会议记录',
-                    f'补译 {missing} 条\n'
-                    f'配置：{app.tcfg.active_engine_profile or "当前配置"}\n'
-                    f'引擎：{app.tcfg.engine} · 模型：{app.tcfg.model or "（未填写）"}\n'
-                    '使用当前主题，可能产生 API 费用。', parent=app.root):
+            choice = ask_backfill(app, missing)
+            if choice is None:
                 return
-            job = MT.TranslationJob(session.path, state['records'], app.tcfg,
+            cfg = copy.deepcopy(app.tcfg)
+            for name, value in choice.items():
+                setattr(cfg, name, value)
+            job = MT.TranslationJob(session.path, state['records'], cfg,
                 persist=lambda results, cancel: MT.persist_for_app(app, session.path, results, cancel))
             app._translation_jobs[key] = job
             state['editing'] = False

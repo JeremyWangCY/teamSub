@@ -1400,7 +1400,7 @@ class App:
         if rec is None:
             rec = next((r for r in reversed(self.records) if (r.get("text") or "").strip()), None)
         history = []
-        keep = max(0, int(getattr(self.tcfg, "float_prev", 1) or 0))
+        keep = floatbar.KEEP - 1            # 悬浮窗滚动保留最近这些条，旧句不清空
         if rec is not None and keep:
             idx = next((k for k, r in enumerate(self.records) if r is rec), None)
             while idx is not None and idx > 0 and len(history) < keep:
@@ -1409,7 +1409,7 @@ class App:
                 if (prev.get("text") or "").strip():
                     history.append(prev)
             history.reverse()
-        sig = (self.display_mode, None if rec is None else (rec.get("name"), rec.get("text"),
+        sig = (self.display_mode, getattr(self, "_meeting_txt", ""), None if rec is None else (rec.get("name"), rec.get("text"),
                rec.get("tr"), rec.get("tr_status"), rec.get("ts")),
                tuple((h.get("id"), h.get("text"), h.get("tr"), h.get("tr_status")) for h in history))
         if sig == self._float_sig and not force:
@@ -1512,7 +1512,8 @@ class App:
             self.root.after(100, lambda: self.txt.yview_moveto(position))
 
     def sync_seg(self):
-        self.seg.set({"auto": 0, "zh": 1, "en": 2}.get(self.tcfg.mode, 0))
+        import frontend_shell
+        self.seg.set(self.tcfg.mode, frontend_shell.tcfg_pair(self.tcfg))
 
     # ---------------- 更多菜单 ----------------
     def _open_menu(self):
@@ -2032,7 +2033,7 @@ class App:
             self.flash(f"已开启翻译；历史 {len(ids)} 条中只补译最近 {self.tcfg.backlog_max} 条，"
                        f"其余可点「翻译历史」")
         elif not silent:
-            self.flash("翻译已开启 · 中英双向互译")
+            self.flash("翻译已开启 · " + self.tcfg.direction())
         return True
 
     def stop_translation(self):
@@ -2059,11 +2060,12 @@ class App:
             self.tcfg.enabled = bool(self.start_translation())
         self.tcfg.save()
 
-    def on_mode_pick(self, label):
-        mapping = {"双向互译": "auto", "全部译中": "zh", "全部译英": "en"}
+    def on_mode_pick(self, mode, lang_a, lang_b):
+        if (mode, lang_a, lang_b) == (self.tcfg.mode, self.tcfg.lang_a, self.tcfg.lang_b):
+            return
         was_on = self.trans_on
         self.stop_translation()
-        self.tcfg.mode = mapping.get(label, "auto")
+        self.tcfg.mode, self.tcfg.lang_a, self.tcfg.lang_b = mode, lang_a, lang_b
         self.tcfg.save()
         # 模式变化会改变目标语言方向，旧译文不再适用 -> 清空重译
         for rec in self.records:
@@ -2072,7 +2074,7 @@ class App:
         self.full_render()
         if was_on and self.start_translation(silent=True):
             self.pending_tr = {i: time.time() for i in range(len(self.records))}
-        self.flash(f"翻译方向：{label}")
+        self.flash("翻译方向：" + self.tcfg.direction())
 
     def _on_tr_result(self, rid, translated, meta):
         """服务线程回调：只入队，绝不直接碰控件。"""

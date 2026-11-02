@@ -602,7 +602,7 @@ def open_settings(self, page="服务"):
             threading.Thread(target=run, daemon=True).start()
 
         def do_save():
-            old_topic, old_mode = self.tcfg.topic, self.tcfg.mode
+            old_topic, old_mode = self.tcfg.topic, (self.tcfg.mode, self.tcfg.pair())
             old_ver = self.tcfg.topic_version()
             previous = self.tcfg
             self.tcfg = copy.deepcopy(previous)
@@ -618,7 +618,7 @@ def open_settings(self, page="服务"):
             import frontend_shell
             frontend_shell.refresh_topic(self)
             refresh_topic_state()
-            if (old_topic != self.tcfg.topic or old_mode != self.tcfg.mode
+            if (old_topic != self.tcfg.topic or old_mode != (self.tcfg.mode, self.tcfg.pair())
                     or old_ver != self.tcfg.topic_version()):
                 for rec in self.records:
                     self._invalidate_translation(rec)

@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """floatbar —— 悬浮字幕窗
 
-一个无边框、置顶的小条：显示最新一条原文与译文，可拖动、可缩放、可回主界面。
+一个无边框、置顶的小窗：滚动显示最近若干条原文与译文（新句在底部，旧句留在上方
+直到滚出去），可拖动、可缩放、可回主界面。
 颜色全部走 ui_kit 令牌，跟随深浅主题；`overrideredirect` 自绘圆角与按钮。
 
 窗口本身是直角的（Windows 无边框窗口默认如此）。只把卡片画圆没有用：卡片
@@ -14,8 +15,9 @@ from PIL import Image, ImageDraw, ImageTk
 
 import ui_kit as UK
 
-W, H = 460, 132          # 默认尺寸
-MIN_W, MIN_H = 300, 92   # 缩放下限：再小连说话人一行都放不下
+W, H = 480, 300          # 默认尺寸：能放下三四条带译文的字幕
+MIN_W, MIN_H = 300, 120  # 缩放下限：再小连一条字幕都放不下
+KEEP = 40                # 最多保留多少条；更早的回主界面看
 ALPHA = 1.0              # 实心卡面，避免桌面纹理干扰阅读
 RADIUS = 8               # 悬浮窗的四角使用同一半径
 
@@ -67,14 +69,9 @@ class FloatBar:
         self.dot.grid(row=0, column=0, padx=(0, 7))
         self._dot_id = self.dot.create_image(7, 7)
         self._paint_dot(UK.C.FLOAT_ACCENT)
-        self.lbl_name = tk.Label(top, text="", bg=UK.C.FLOAT_BG, fg=UK.C.FLOAT_TEXT,
-                                 font=UK.F_NAME)
-        self.lbl_name.grid(row=0, column=1, sticky="w")
-        self.lbl_time = tk.Label(top, text="", bg=UK.C.FLOAT_BG, fg=UK.C.FLOAT_MUTED,
-                                 font=UK.F_TIME)
-        self.name_separator = tk.Frame(top, bg=UK.C.FLOAT_LINE, width=1, height=16)
-        self.name_separator.grid(row=0, column=2, padx=(10, 10))
-        self.lbl_time.grid(row=0, column=3, sticky="w")
+        self.lbl_name = tk.Label(top, text="", bg=UK.C.FLOAT_BG, fg=UK.C.FLOAT_MUTED,
+                                 font=UK.F_MINI, anchor="w")
+        self.lbl_name.grid(row=0, column=1, columnspan=4, sticky="we")
         self.btn_back = self._icon_button(top, "back", self.back_to_main)
         self.btn_back.grid(row=0, column=5, padx=(4, 4))
         tk.Frame(top, bg=UK.C.FLOAT_LINE, width=1, height=18).grid(row=0, column=6)
@@ -96,27 +93,11 @@ class FloatBar:
         size = getattr(app, "reading_size", 12)
         self._font_src = (UK.FAMILY, size)
         self._font_tr = (UK.FAMILY, size + 1, "normal" if UK.theme() == "dark" else "bold")
-        self._font_prev = (UK.FAMILY, max(9, size - 1))
-        self._src_text = ""
-        self._tr_text = ""
-        self._prev_items = []
         self._wrap_px = 0
-        # 上一条：淡色留在上方当语境，翻译时不用来回切窗口
-        self.prevbox = tk.Frame(self.content, bg=UK.C.FLOAT_BG)
-        self.prevbox.grid(row=0, column=0, sticky="we")
-        self.prevbox.columnconfigure(0, weight=1)
-        self.lbl_src = tk.Label(self.content, text="", bg=UK.C.FLOAT_BG, fg=UK.C.FLOAT_TEXT,
-                                font=self._font_src, anchor="nw", justify="left")
-        self.lbl_src.grid(row=1, column=0, sticky="we", pady=(9, 8))
-        self.content_line = tk.Frame(self.content, bg=UK.C.FLOAT_LINE, height=1)
-        self.content_line.grid(row=2, column=0, sticky="we")
-        self.trrow = tk.Frame(self.content, bg=UK.C.FLOAT_BG)
-        self.trrow.grid(row=3, column=0, sticky="we", pady=(8, 2))
-        self.trrow.columnconfigure(0, weight=1)
-        self.lbl_arrow = tk.Label(self.trrow, text="", bg=UK.C.FLOAT_BG)
-        self.lbl_tr = tk.Label(self.trrow, text="", bg=UK.C.FLOAT_BG, fg=UK.C.FLOAT_ACCENT,
-                               font=self._font_tr, anchor="nw", justify="left")
-        self.lbl_tr.grid(row=0, column=0, sticky="we")
+        self._entries = []          # 每条字幕一组控件，旧 → 新
+        self._follow = True         # 停在底部时新句自动滚入；用户往上翻就不打扰
+        self.lbl_empty = tk.Label(self.content, text="暂无字幕", bg=UK.C.FLOAT_BG,
+                                  fg=UK.C.FLOAT_MUTED, font=self._font_src, anchor="w")
 
         # ---- 右下角缩放手柄 ----
         # overrideredirect 窗口没有系统边框，不能靠系统拖边缩放，只能自绘。
@@ -138,14 +119,10 @@ class FloatBar:
         w.bind("<Configure>", self._on_window_configure)
 
         # ---- 交互 ----
-        for wd in (self.card, body, top, self.content_canvas, self.content, self.prevbox,
-                   self.lbl_src, self.trrow, self.lbl_arrow, self.lbl_tr, self.lbl_name,
-                   self.lbl_time):
-            wd.bind("<Button-1>", self._press)
-            wd.bind("<B1-Motion>", self._motion)
-            wd.bind("<ButtonRelease-1>", self._release)
-            wd.bind("<Double-Button-1>", lambda e: self.back_to_main())
-        for wd in (self.content_canvas, self.content, self.lbl_src, self.trrow, self.lbl_tr):
+        for wd in (self.card, body, top, self.content_canvas, self.content, self.lbl_name,
+                   self.lbl_empty):
+            self._bind_drag(wd)
+        for wd in (self.content_canvas, self.content, self.lbl_empty):
             wd.bind("<MouseWheel>", self._scroll_content)
         w.bind("<Button-1>", self._press)
         w.bind("<B1-Motion>", self._motion)
@@ -166,84 +143,113 @@ class FloatBar:
         self.dot.itemconfigure(self._dot_id, image=self._dot_image)
         self._dot_color = color
 
+    def _bind_drag(self, wd):
+        wd.bind("<Button-1>", self._press)
+        wd.bind("<B1-Motion>", self._motion)
+        wd.bind("<ButtonRelease-1>", self._release)
+        wd.bind("<Double-Button-1>", lambda e: self.back_to_main())
+
     def sync(self, rec, history=()):
-        """灌入最新一条记录；history 为之前的若干条（淡色留在上方当语境）。"""
-        text, translation = "", ""
-        color = UK.C.FLOAT_ACCENT
-        mode = getattr(self.app, "display_mode", "both")
-        if rec is None:
-            self._full_name = ""
-            self.name_separator.grid_remove()
-            self.lbl_name.configure(text="")
-            self.lbl_time.configure(text="")
-            text = "暂无字幕"
-            self._paint_dot(UK.C.DISABLED)
+        """灌入最新一条与之前的若干条：逐条增量更新，旧句不清空。"""
+        records = [r for r in list(history)[-(KEEP - 1):] if (r.get("text") or "").strip()]
+        if rec is not None:
+            records.append(rec)
+        self._paint_dot(UK.C.DISABLED if rec is None
+                        else self.app.speaker_color(rec["name"]))
+        self._show_meeting()
+        # 先记下是否停在底部：增删条目后 yview 会变
+        try:
+            self._follow = not self._entries or self.content_canvas.yview()[1] >= 0.999
+        except tk.TclError:
+            self._follow = True
+        keyed = {e["id"]: e for e in self._entries}
+        wanted = [r.get("id") or id(r) for r in records]
+        for entry in self._entries:
+            if entry["id"] not in wanted:
+                entry["frame"].destroy()
+        entries = []
+        for row, r in enumerate(records):
+            entry = keyed.get(wanted[row]) or self._new_entry(wanted[row])
+            self._fill_entry(entry, r, latest=row == len(records) - 1)
+            entry["frame"].grid(row=row, column=0, sticky="we", pady=(0, 10))
+            entries.append(entry)
+        self._entries = entries
+        if entries:
+            self.lbl_empty.grid_remove()
         else:
-            self.name_separator.grid()
-            name = self.app.name_of(rec)
-            self._full_name = name
-            self._paint_dot(self.app.speaker_color(rec["name"]))
-            self.lbl_name.configure(text=UK.fit_text(name, UK.F_NAME, max(24, self.w - 240)))
-            self.lbl_time.configure(text=self.app.ts_of(rec))
-            if mode != "translation":
-                text = rec.get("text", "")
-            if mode != "source":
-                translation = rec.get("tr") or ""
-                if not translation and rec.get("tr_status") == "pending":
-                    translation, color = "翻译中…", UK.C.FLOAT_MUTED
-                elif not translation and rec.get("tr_status") == "fail":
-                    translation, color = "翻译失败", UK.C.RED
-                elif not translation and mode == "translation":
-                    translation, color = "暂无译文", UK.C.FLOAT_MUTED
-        self._src_text = text
-        self._tr_text = translation
-        self._prev_items = [r for r in history if (r.get("text") or "").strip()]
-        self.lbl_src.configure(fg=UK.C.FLOAT_MUTED if rec is None else UK.C.FLOAT_TEXT)
-        self.lbl_tr.configure(fg=color)
-        if text:
-            self.lbl_src.grid()
-        else:
-            self.lbl_src.grid_remove()
-        if translation:
-            self.trrow.grid()
-        else:
-            self.trrow.grid_remove()
-        if text and translation:
-            self.content_line.grid()
-        else:
-            self.content_line.grid_remove()
-        self._apply_wrap()
-        self.content_canvas.yview_moveto(0)
+            self.lbl_empty.grid(row=0, column=0, sticky="we", pady=(8, 0))
         self._fit()
 
-    def _render_history(self):
-        """上一句：小一号的灰色原文，最多两行，超出省略。"""
-        for child in self.prevbox.winfo_children():
-            child.destroy()
-        if not self._prev_items:
-            self.prevbox.grid_remove()
+    def _show_meeting(self):
+        meeting = getattr(self.app, "_meeting_txt", "") or ""
+        self.lbl_name.configure(text=UK.fit_text(meeting, UK.F_MINI, max(40, self.w - 120)))
+
+    def _new_entry(self, rid):
+        frame = tk.Frame(self.content, bg=UK.C.FLOAT_BG)
+        frame.columnconfigure(0, weight=1)
+        head = tk.Frame(frame, bg=UK.C.FLOAT_BG)
+        head.grid(row=0, column=0, sticky="we")
+        name = tk.Label(head, text="", bg=UK.C.FLOAT_BG, font=UK.F_NAME)
+        name.pack(side="left")
+        when = tk.Label(head, text="", bg=UK.C.FLOAT_BG, fg=UK.C.FLOAT_MUTED, font=UK.F_TIME)
+        when.pack(side="left", padx=(8, 0))
+        src = tk.Label(frame, text="", bg=UK.C.FLOAT_BG, font=self._font_src,
+                       anchor="nw", justify="left")
+        tr = tk.Label(frame, text="", bg=UK.C.FLOAT_BG, font=self._font_tr,
+                      anchor="nw", justify="left")
+        for wd in (frame, head, name, when, src, tr):
+            self._bind_drag(wd)
+            wd.bind("<MouseWheel>", self._scroll_content)
+        return dict(id=rid, sig=None, frame=frame, name=name, time=when, src=src, tr=tr,
+                    src_text="", tr_text="")
+
+    def _fill_entry(self, entry, rec, latest):
+        mode = getattr(self.app, "display_mode", "both")
+        text, translation, color = "", "", UK.C.FLOAT_ACCENT
+        if mode != "translation":
+            text = rec.get("text", "")
+        if mode != "source":
+            translation = rec.get("tr") or ""
+            if not translation and rec.get("tr_status") == "pending":
+                translation, color = "翻译中…", UK.C.FLOAT_MUTED
+            elif not translation and rec.get("tr_status") == "fail":
+                translation, color = "翻译失败", UK.C.RED
+            elif not translation and mode == "translation":
+                # 只看译文时没有译文（同语种、未开翻译）就退回原文，不留空条
+                translation, color = rec.get("text", ""), UK.C.FLOAT_TEXT
+        stamp = self.app.ts_of(rec)
+        sig = (rec.get("name"), text, translation, color, latest, stamp)
+        if sig == entry["sig"]:
             return
-        self.prevbox.grid()
-        # 只看译文时，上一句也优先给译文，避免两种语言交替打断阅读
-        translated_only = getattr(self.app, "display_mode", "both") == "translation"
-        for row, rec in enumerate(self._prev_items):
-            last = row == len(self._prev_items) - 1
-            body = rec.get("text") or ""
-            if translated_only and (rec.get("tr") or "").strip():
-                body = rec["tr"]
-            label = tk.Label(self.prevbox, text="", bg=UK.C.FLOAT_BG, fg=UK.C.FLOAT_MUTED,
-                             font=self._font_prev, anchor="nw", justify="left", wraplength=0)
-            label.grid(row=row, column=0, sticky="we", pady=(0, 8 if last else 4))
-            label.configure(text=UK.wrap_cjk(body, self._font_prev,
-                                             self._wrap_px, max_lines=2))
-            label.bind("<Button-1>", self._press)
-            label.bind("<B1-Motion>", self._motion)
-            label.bind("<ButtonRelease-1>", self._release)
-            label.bind("<Double-Button-1>", lambda e: self.back_to_main())
-            label.bind("<MouseWheel>", self._scroll_content)
+        entry["sig"] = sig
+        entry["src_text"], entry["tr_text"] = text, translation
+        entry["name"].configure(text=self.app.name_of(rec),
+                                fg=self.app.speaker_color(rec["name"]))
+        entry["time"].configure(text=stamp)
+        # 旧句原文略淡，视线自然落到最新一句；译文保持强调色，回看时照样好读
+        entry["src"].configure(fg=UK.C.FLOAT_TEXT if latest else UK.C.FLOAT_MUTED)
+        entry["tr"].configure(fg=color)
+        self._wrap_entry(entry)
+
+    def _wrap_entry(self, entry):
+        width = self._wrap_px
+        if entry["src_text"]:
+            entry["src"].configure(text=UK.wrap_cjk(entry["src_text"], self._font_src, width))
+            entry["src"].grid(row=1, column=0, sticky="we", pady=(2, 0))
+        else:
+            entry["src"].grid_remove()
+        if entry["tr_text"]:
+            entry["tr"].configure(text=UK.wrap_cjk(entry["tr_text"], self._font_tr, width))
+            entry["tr"].grid(row=2, column=0, sticky="we", pady=(2, 0))
+        else:
+            entry["tr"].grid_remove()
 
     def _scroll_content(self, event):
         self.content_canvas.yview_scroll(-int(event.delta / 120), "units")
+        try:
+            self._follow = self.content_canvas.yview()[1] >= 0.999
+        except tk.TclError:
+            pass
         return "break"
 
     def _icon_button(self, master, icon, command):
@@ -318,48 +324,40 @@ class FloatBar:
 
     def _apply_wrap(self):
         """文字随窗口宽度换行（自己排，见 UK.wrap_cjk）。"""
-        if hasattr(self, '_full_name'):
-            self.lbl_name.configure(text=UK.fit_text(self._full_name, UK.F_NAME, max(24, self.w - 240)))
         usable = max(120, self.w - 2 * self.card.pad - 10)
         if self.scroll.winfo_manager():
             usable = max(120, usable - 18)
         self.content_canvas.itemconfigure(self._content_window, width=usable)
-        self._wrap_px = max(60, usable - 6)
-        # wraplength=0：交给 wrap_cjk 断行，避免 Tk 只在空格处断造成的孤字行
-        self.lbl_src.configure(wraplength=0,
-                               text=UK.wrap_cjk(self._src_text, self._font_src, self._wrap_px))
-        self.lbl_tr.configure(wraplength=0,
-                              text=UK.wrap_cjk(self._tr_text, self._font_tr, self._wrap_px))
-        self._render_history()
+        wrap = max(60, usable - 6)
+        if wrap != self._wrap_px:
+            self._wrap_px = wrap
+            for entry in self._entries:
+                self._wrap_entry(entry)
 
     def _fit(self):
-        """自适应内容；超长字幕限制高度并提供滚动。"""
+        """窗口高度固定（默认值或用户拖出来的），内容超出时滚动；跟随时贴底。"""
         try:
-            max_h = max(MIN_H, int(UK.lpx(self.win.winfo_screenheight()) * 0.55))
+            h = max(MIN_H, self.user_h or H)
+            if abs(h - self.h) > 1:
+                self.h = h
+                self.win.geometry(f"{UK.px(self.w)}x{UK.px(h)}+{self.win.winfo_x()}+{self.win.winfo_y()}")
+                self._round_window()
             self._apply_wrap()
             self.card.update_idletasks()
             content_h = UK.lpx(self.content.winfo_reqheight())
-            overhead = UK.lpx(self.card.body.winfo_reqheight()) - self.content_canvas.winfo_reqheight() + 2 * self.card.pad + 12
-            viewport_h = max(30, max_h - overhead)
+            viewport_h = max(30, UK.lpx(self.content_canvas.winfo_height()))
             needs_scroll = content_h > viewport_h
-            if needs_scroll and not self.scroll.winfo_manager():
-                self.scroll.pack(side="right", fill="y", before=self.content_canvas)
+            if needs_scroll != bool(self.scroll.winfo_manager()):
+                if needs_scroll:
+                    self.scroll.pack(side="right", fill="y", before=self.content_canvas)
+                else:
+                    self.scroll.pack_forget()
                 self._apply_wrap()
                 self.card.update_idletasks()
                 content_h = UK.lpx(self.content.winfo_reqheight())
-            elif not needs_scroll and self.scroll.winfo_manager():
-                self.scroll.pack_forget()
-                self._apply_wrap()
-                self.card.update_idletasks()
-                content_h = UK.lpx(self.content.winfo_reqheight())
-            self.content_canvas.configure(height=min(content_h, viewport_h),
-                                          scrollregion=(0, 0, 0, content_h))
-            h = max(MIN_H, min(max_h, max(overhead + content_h, self.user_h)))
-            if abs(h - self.h) > 1:
-                self.h = h
-                x, y = self.win.winfo_x(), self.win.winfo_y()
-                self.win.geometry(f"{UK.px(self.w)}x{UK.px(h)}+{x}+{y}")
-                self._round_window()
+            self.content_canvas.configure(scrollregion=(0, 0, 0, max(content_h, viewport_h)))
+            if self._follow:
+                self.content_canvas.yview_moveto(1.0)
         except tk.TclError:
             pass
 
@@ -378,6 +376,7 @@ class FloatBar:
         # 会误判「尺寸没变」而跳过重排。
         self.w, self.user_h, self.h = nw, nh, nh
         self._apply_wrap()
+        self._show_meeting()
         try:
             self.win.geometry(f"{UK.px(nw)}x{UK.px(nh)}+{self.win.winfo_x()}+{self.win.winfo_y()}")
         except tk.TclError:

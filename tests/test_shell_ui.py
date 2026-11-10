@@ -247,3 +247,33 @@ class RestoreVeilTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class LiveRewriteTests(ShellTestCase):
+    def test_rewrite_keeps_old_translation_until_new_one(self):
+        """字幕改写时旧译文留到新译文到达，块高度不来回跳。"""
+        from datetime import datetime
+        self.start()
+        app = self.app
+        app.trans_on = True
+        app.pump_translation = lambda: None
+        rec = {'name': 'Alice', 'raw': 'Alice', 'text': 'What kind of nut',
+               'ts': datetime.now(), 'backlog': False, 'id': 'r1', 'revision': 0,
+               'tr': '什么螺母', 'tr_status': 'ok'}
+        app.q.put(('new', rec))
+        app.pump()
+        app.q.put(('update', {'id': 'r1', 'text': 'What kind of nut are you using'}))
+        app.pump()
+        live = app.records[-1]
+        self.assertNotIn('tr', live)
+        self.assertEqual(live['_tr_stale'], '什么螺母')
+        self.assertIn('什么螺母', app.txt.get('1.0', 'end'))
+        token = 'tok'
+        app.tr_requests[token] = (live, live['text'])
+        live['_tr_request'] = token
+        app.q.put(('tr', (token, '你们用的是什么螺母', {'status': 'ok'})))
+        app.pump()
+        self.assertNotIn('_tr_stale', live)
+        body = app.txt.get('1.0', 'end')
+        self.assertIn('你们用的是什么螺母', body)
+        self.assertNotIn('→  什么螺母\n', body)

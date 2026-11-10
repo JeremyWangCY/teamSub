@@ -24,6 +24,8 @@ def configure_tags(txt, *, reading_size=12, density="comfort", accent=None):
     txt.tag_configure("trans", foreground=UK.C.SUB,
                       font=(UK.FAMILY, reading_size),
                       lmargin1=14, lmargin2=14, spacing3=spacing)
+    # 字幕改写后、新译文到达前沿用旧译文：同字号只换浅色，行高不变
+    txt.tag_configure("trstale", foreground=UK.C.T3)
     txt.tag_configure("trpending", foreground=UK.C.T3, font=UK.F_MINI,
                       lmargin1=14, lmargin2=14, spacing3=spacing)
     txt.tag_configure("trfail", foreground=UK.C.RED, background=UK.C.RED_S,
@@ -67,12 +69,15 @@ def render_block(txt, i, rec, ctx, display_mode="both", at=None, retry=True):
         else:
             parts.append(("→  ", ("trans", row_tag)))
         parts.append((f"{rec['tr']}\n", ("trans", row_tag)))
+    elif status in (None, "pending") and rec.get("_tr_stale") and display_mode != "source":
+        parts.append((f"→  {rec['_tr_stale']}\n", ("trans", "trstale")))
     elif status == "pending":
         parts.append(("→  翻译中…\n", "trpending"))
     elif status == "fail":
         hint = " ⚠  翻译失败 · 点击重试\n" if retry else " ⚠  翻译失败\n"
         parts.append((hint, ("trfail", f"trfail{i}")))
-    if display_mode == "translation" and status not in ("ok", "pending", "fail"):
+    if (display_mode == "translation" and status not in ("ok", "pending", "fail")
+            and not rec.get("_tr_stale")):
         parts.append(("无需翻译\n" if rec.get("tr_status") == "skip" else "译文未完成\n",
                       "trpending"))
     cur = pos

@@ -210,7 +210,10 @@ class FloatBar:
             text = rec.get("text", "")
         if mode != "source":
             translation = rec.get("tr") or ""
-            if not translation and rec.get("tr_status") == "pending":
+            if not translation and rec.get("_tr_stale"):
+                # 字幕还在改写：旧译文淡色留着，等新译文替换，避免条目高度来回跳
+                translation, color = rec["_tr_stale"], UK.C.FLOAT_MUTED
+            elif not translation and rec.get("tr_status") == "pending":
                 translation, color = "翻译中…", UK.C.FLOAT_MUTED
             elif not translation and rec.get("tr_status") == "fail":
                 translation, color = "翻译失败", UK.C.RED

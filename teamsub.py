@@ -1410,8 +1410,9 @@ class App:
                     history.append(prev)
             history.reverse()
         sig = (self.display_mode, getattr(self, "_meeting_txt", ""), None if rec is None else (rec.get("name"), rec.get("text"),
-               rec.get("tr"), rec.get("tr_status"), rec.get("ts")),
-               tuple((h.get("id"), h.get("text"), h.get("tr"), h.get("tr_status")) for h in history))
+               rec.get("tr"), rec.get("tr_status"), rec.get("_tr_stale"), rec.get("ts")),
+               tuple((h.get("id"), h.get("text"), h.get("tr"), h.get("tr_status"),
+                      h.get("_tr_stale")) for h in history))
         if sig == self._float_sig and not force:
             return
         self._float_sig = sig
@@ -1796,7 +1797,12 @@ class App:
                     if idx is not None:
                         rec = self.records[idx]
                         rec.update(a)
+                        # 旧译文先留着（淡色）直到新译文到：字幕每改写一次就清空译文，
+                        # 块高度会在「有译文 / 没译文」之间来回跳，整屏跟着抖
+                        stale = rec.get('tr') or rec.get('_tr_stale')
                         self._invalidate_translation(rec)
+                        if stale and self.trans_on:
+                            rec['_tr_stale'] = stale
                         if not self.speaker_filter or rec["name"] == self.speaker_filter:
                             self.update_record(idx, rec)
                         # 文本还在改写：重置稳定计时，译文稍后重做
@@ -1813,6 +1819,7 @@ class App:
                     if (rid is not None and rec.get('_tr_request') == token
                             and rec['text'] == source):
                         rec.pop('_tr_request', None)
+                        rec.pop('_tr_stale', None)
                         st = meta.get("status")
                         if st == "ok":
                             rec["tr"] = tr
@@ -1994,7 +2001,8 @@ class App:
     def _invalidate_translation(self, rec):
         token = rec.pop('_tr_request', None)
         self.tr_requests.pop(token, None)
-        for key in ('tr', 'tr_status', 'tr_cached', 'tr_key', 'tr_src', 'tr_tgt', 'tr_err', 'qa'):
+        for key in ('tr', 'tr_status', 'tr_cached', 'tr_key', 'tr_src', 'tr_tgt', 'tr_err', 'qa',
+                    '_tr_stale'):
             rec.pop(key, None)
 
     def _submit_translation(self, rid, force=False):

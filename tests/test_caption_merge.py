@@ -191,3 +191,20 @@ class WrapTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SpeakerNameTests(unittest.TestCase):
+    """Teams 文本节点里认出发言人：外部嘉宾的「姓名 - 公司」不能被当成字幕。"""
+
+    def test_org_suffix_name_is_speaker(self):
+        reader = T.CaptionReader(queue.Queue())
+        pairs = reader.to_pairs(["Nguyễn Đức Thắng (VF-KPTX-VTKMĐPTX)", "Yeah.",
+                                 "Leonardo Rossi - Torino Design", "OK.",
+                                 "Nguyễn Đức Thắng (VF-KPTX-VTKMĐPTX)", "So I think you should move it."])
+        self.assertEqual([(p[0], p[2]) for p in pairs],
+                         [("Nguyễn Đức Thắng", "Yeah."), ("Leonardo Rossi", "OK."),
+                          ("Nguyễn Đức Thắng", "So I think you should move it.")])
+
+    def test_sentence_with_dash_is_not_name(self):
+        for text in ("So we move it - Torino", "OK - fine", "Yes - Right"):
+            self.assertFalse(T.is_org_name(text), text)

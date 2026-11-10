@@ -266,6 +266,18 @@ UI_NOISE = re.compile(
     r"打开实时字幕|翻译为|关闭原文|中号字体|展开字幕|收起字幕)"
 )
 NAME_HINT = re.compile(r"(\([A-ZĐ0-9][A-ZĐ0-9\-]{3,}\)\s*$)|(\s_\s*\[)")
+# 外部嘉宾常见「姓名 - 公司」：Leonardo Rossi - Torino Design。
+# 姓名 2～5 个词、公司 1～6 个词，两边每个词都要首字母大写，句子几乎不会长这样。
+ORG_NAME = re.compile(r"^(?P<person>[^\W\d_][\w'.]*(?:\s+[^\W\d_][\w'.]*){1,4})"
+                      r"\s+[-–—|]\s+(?P<org>[\w&'.]+(?:\s+[\w&'.()]+){0,5})$")
+
+
+def is_org_name(text: str) -> bool:
+    m = ORG_NAME.match((text or "").strip())
+    if not m or len(text) > 80:
+        return False
+    words = m.group("person").split() + m.group("org").split()
+    return all(not w[0].isalpha() or w[0].isupper() or not w.isascii() for w in words)
 OBJ_CHAR = "\ufffc"
 
 # ----------------------------------------------------------------------------
@@ -282,6 +294,8 @@ def simplify_name(raw: str) -> str:
     n = clean(raw)
     n = re.split(r"\s_\s*\[", n)[0]
     n = re.sub(r"\s*\([A-ZĐ0-9][A-ZĐ0-9\-]{3,}\)\s*$", "", n)
+    if is_org_name(n):
+        n = ORG_NAME.match(n).group("person")
     n = re.sub(r"\s{2,}", " ", n).strip(" -_·")
     return n or clean(raw)
 
@@ -548,7 +562,7 @@ class CaptionReader(threading.Thread):
     def is_name(self, t: str) -> bool:
         if t in self.known_raw or simplify_name(t) in self.known_norm:
             return True
-        return bool(NAME_HINT.search(t))
+        return bool(NAME_HINT.search(t)) or is_org_name(t)
 
     def read_feishu(self):
         """飞书字幕是结构化条目：直接产出 (规范名, 原名, 文本)，
@@ -689,6 +703,8 @@ class CaptionReader(threading.Thread):
 
     @staticmethod
     def _looks_like_name(text):
+        if is_org_name(text):
+            return True
         words = text.strip().split()
         return (0 < len(words) <= 5 and len(text) <= 70
                 and all(w.replace('-', '').replace("'", '').isalpha() for w in words)

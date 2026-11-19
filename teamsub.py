@@ -85,7 +85,7 @@ RESOURCE_DIR = _resource_dir()  # 只读资源（随 exe 打包）
 # 常量放在模块顶层（而不是 pyproject/打包元数据里），是为了让源码运行、
 # 冻结成 exe 两种方式读到的都是同一个值。
 APP_DISPLAY_NAME = "TeamSub"
-APP_VERSION = "0.2.6"
+APP_VERSION = "0.2.7"
 
 CAPTION_DIR = Path(os.environ.get("TEAMSUB_DATA_DIR", APP_DIR)) / "captions"
 
@@ -1358,8 +1358,12 @@ class App:
                     self.var_float.set(False)
                 except Exception:
                     pass
-            # 关闭悬浮条后必须保证还留着一个可见窗口，并清除托盘/遮罩标记。
-            if not self._main_visible():
+            # 关闭悬浮条时：如果主窗口正在任务栏最小化（iconic）或已收进托盘
+            # （_tray_hidden），保持主窗口原状不动（避免点 ✕ 反而把主窗口弹出来）；
+            # 只有既不在屏幕上、又不在任务栏、也不在托盘的异常隐藏态才兜底唤出主窗口。
+            if (not self._main_visible()
+                    and self._win_state(self.root) != "iconic"
+                    and not getattr(self, "_tray_hidden", False)):
                 self.restore_main()
             if not silent:
                 self.flash("悬浮字幕窗已关闭")

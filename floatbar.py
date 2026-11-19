@@ -80,10 +80,10 @@ class FloatBar:
         self.lbl_name = tk.Label(top, text="", bg=UK.C.FLOAT_BG, fg=UK.C.FLOAT_MUTED,
                                  font=UK.F_MINI, anchor="w")
         self.lbl_name.grid(row=0, column=1, columnspan=4, sticky="we")
-        self.btn_back = self._icon_button(top, "back", self.back_to_main)
+        self.btn_back = self._icon_button(top, "back", self.back_to_main, tooltip="回到主界面")
         self.btn_back.grid(row=0, column=5, padx=(4, 4))
         tk.Frame(top, bg=UK.C.FLOAT_LINE, width=1, height=18).grid(row=0, column=6)
-        self.btn_close = self._icon_button(top, "close", self.close)
+        self.btn_close = self._icon_button(top, "close", self.close, tooltip="关闭悬浮窗")
         self.btn_close.grid(row=0, column=7, padx=(4, 0))
 
         self.header_line = tk.Frame(body, bg=UK.C.FLOAT_LINE, height=1)
@@ -263,7 +263,7 @@ class FloatBar:
             pass
         return "break"
 
-    def _icon_button(self, master, icon, command):
+    def _icon_button(self, master, icon, command, tooltip=None):
         """线条图标不依赖系统字体的符号形状。"""
         button = tk.Canvas(master, width=30, height=28, bg=UK.C.FLOAT_BG,
                            highlightthickness=0, bd=0, cursor="hand2", takefocus=True)
@@ -286,6 +286,8 @@ class FloatBar:
         button.bind("<ButtonRelease-1>", activate)
         button.bind("<Return>", activate)
         button.bind("<space>", activate)
+        if tooltip:
+            UK.Tooltip(button, tooltip)
         return button
 
     def _on_window_configure(self, event):

@@ -350,21 +350,29 @@ class FloatBarLifecycleTests(ShellTestCase):
         self.assertTrue(app._float_visible())
         self.assertTrue(app.float_on)
 
-    def test_closing_float_bar_while_main_hidden_reveals_veil_and_clears_tray_flags(self):
-        """主窗口隐藏在托盘/遮罩下时关闭悬浮窗，主窗口恢复可见且解除透明遮罩。"""
+    def test_closing_float_bar_keeps_minimized_or_tray_hidden_and_recovers_orphan(self):
+        """点悬浮窗 ✕ 只关悬浮窗：最小化或收进托盘时保持不弹主窗口；仅无入口孤儿态才兜底唤回并解开遮罩。"""
         self.start()
         app = self.app
+        # 1) 收进托盘时点 ✕：主窗口继续留在托盘，不弹出来
         app._tray_hidden = True
         app._was_iconic = True
+        app.root.withdraw()
+        app.set_float(True)
+        self.pump()
+        app.set_float(False)
+        self.pump()
+        self.assertEqual(app._win_state(app.root), 'withdrawn')
+        self.assertTrue(app._tray_hidden)
+        # 2) 无托盘且 withdrawn 的异常隐藏态点 ✕：兜底唤回主窗口并解除透明遮罩
+        app._tray_hidden = False
         if app._veil is not None:
             app._veil.hide()
-        app.root.withdraw()
         app.set_float(True)
         self.pump()
         app.set_float(False)
         self.pump(.25)
         self.assertEqual(app._win_state(app.root), 'normal')
-        self.assertFalse(app._tray_hidden)
         self.assertFalse(app._was_iconic)
         if app._veil is not None:
             self.assertFalse(app._veil.veiled)

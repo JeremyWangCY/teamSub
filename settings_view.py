@@ -98,18 +98,28 @@ def open_settings(self, page="服务"):
                 return
             probing['on']=True
             level=REASONING_LABELS.get(sel_reason.get(),'auto')
+            candidate=copy.deepcopy(self.tcfg)
+            candidate.engine={'openai 兼容':'openai','DeepL':'deepl','Azure':'azure'}[sel_engine.get()]
+            candidate.model=e_model.get().strip()
+            candidate.base_url=e_base.get().strip()
+            candidate.api_key=e_key.get().strip()
+            candidate.azure_region=e_region.get().strip()
+            candidate.reasoning=level
             self.flash('正在检测上游是否支持思考参数…')
 
-            def apply(text):
+            def apply(result):
+                field_name, text = result
                 probing['on']=False
+                if field_name:
+                    self.tcfg.reasoning_field = field_name
                 self.flash(text)
 
             def work():
                 try:
-                    field_name, message = TR.probe_reasoning(self.tcfg, level)
+                    field_name, message = TR.probe_reasoning(candidate, level, persist=False)
                 except Exception as exc:
                     field_name, message = '', f'检测失败：{exc}'
-                self.q.put(('ui',(apply,('✓ ' if field_name else '✗ ')+message)))
+                self.q.put(('ui',(apply,(field_name,('✓ ' if field_name else '✗ ')+message))))
 
             threading.Thread(target=work,daemon=True).start()
 
@@ -671,7 +681,7 @@ def open_settings(self, page="服务"):
                 item = topic_values.setdefault(state['key'], {})
                 item.update(name=e_tname.get().strip() or state['key'],
                             brief=t_brief.get().strip(), glossary=t_gloss.get().strip())
-            return (bool(sw_tr.get()), active_profile['name'], profile_values,
+            return (bool(sw_tr.get()), sel_reason.get(), active_profile['name'], profile_values,
                     state['key'], tuple(order), tuple(hidden), topic_values,
                     {key: value.get() for key, value in ents.items()},
                     {key: value.get() for key, value in extras.items()},

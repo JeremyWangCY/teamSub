@@ -42,6 +42,15 @@ class DetectTests(unittest.TestCase):
         self.assertIn("한국어", prompt)
         self.assertNotIn("中英互译", prompt)
 
+    def test_qa_check_ignores_term_matching_and_checks_numbers(self):
+        cfg = T.Config(topic="custom1", topics_custom={
+            "custom1": {"name": "车身", "brief": "", "glossary": "body-in-white=白车身"}
+        })
+        issues = T.qa_check("Check the body-in-white gap 3.5 mm", "检查车身总成间隙 3.5 毫米", cfg, "en", "zh")
+        self.assertEqual(issues, [])
+        missing_num = T.qa_check("The gap is 3.5 mm", "间隙合适", cfg, "en", "zh")
+        self.assertTrue(any(i["type"] == "number" for i in missing_num))
+
 
 class PickerTests(unittest.TestCase):
     def setUp(self):

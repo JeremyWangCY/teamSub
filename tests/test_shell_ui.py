@@ -277,3 +277,53 @@ class LiveRewriteTests(ShellTestCase):
         body = app.txt.get('1.0', 'end')
         self.assertIn('你们用的是什么螺母', body)
         self.assertNotIn('→  什么螺母\n', body)
+
+
+class WatchdogAndSettingsGuardTests(ShellTestCase):
+    def test_watchdog_recovers_withdrawn_window_once_and_does_not_loop(self):
+        """看门狗在零窗口时唤出主窗口后，主窗口恢复可见且不再重复触发看门狗。"""
+        self.start()
+        app = self.app
+        app.root.withdraw()
+        app._tray_hidden = False
+        app._was_iconic = True
+        if app._veil is not None:
+            app._veil.hide()
+        app._hidden_since = time.monotonic() - 3.0
+        notes = []
+        orig_log = A.log_note
+        A.log_note = notes.append
+        try:
+            app._watchdog()
+            self.pump(.2)
+            self.assertEqual(len(notes), 1)
+            self.assertEqual(app._win_state(app.root), 'normal')
+            self.assertFalse(app._was_iconic)
+            if app._veil is not None:
+                self.assertFalse(app._veil.veiled)
+            # 再跑一轮看门狗不应再次触发
+            app._hidden_since = time.monotonic() - 3.0
+            app._watchdog()
+            self.assertEqual(len(notes), 1)
+        finally:
+            A.log_note = orig_log
+
+    def test_settings_reasoning_change_triggers_unsaved_guard(self):
+        """设置页修改思考强度应触发未保存草稿保护。"""
+        self.start()
+        self.app.open_settings()
+        self.pump()
+        selects = [w for w in self.walk(self.app.sheet_layer)
+                   if isinstance(w, UK.Select) and '高' in getattr(w, 'options', ())]
+        self.assertEqual(len(selects), 1)
+        sel_reason = selects[0]
+        asked = []
+        orig_ask = A.messagebox.askyesno
+        A.messagebox.askyesno = lambda *a, **k: (asked.append(True), False)[1]
+        try:
+            sel_reason.set('高', notify=True)
+            self.assertFalse(self.app._allow_leave_sheet())
+            self.assertEqual(len(asked), 1)
+        finally:
+            A.messagebox.askyesno = orig_ask
+

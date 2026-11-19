@@ -98,7 +98,7 @@ class TranslationJob:
                         updates=self.updates[since:])
 
     def _run(self):
-        from translator import TranslationService
+        from translator import TranslationService, qa_check
         replies = queue.Queue()
         svc = None
         dirty = False
@@ -138,8 +138,15 @@ class TranslationJob:
                     status = meta.get('status', 'fail')
                     if status == 'skip' or (status == 'ok' and text.strip()):
                         rec = self.records[i]
+                        qa = []
+                        if status == 'ok':
+                            try:
+                                qa = qa_check(rec['text'], text, self.cfg,
+                                              meta.get('src') or 'en', meta.get('tgt') or 'zh')
+                            except Exception:
+                                qa = []
                         results[rec['id']] = (rec, dict(tr=text if status == 'ok' else '',
-                                                     tr_status=status, qa=[]))
+                                                     tr_status=status, qa=qa))
                     else:
                         failures += 1
                         error = meta.get('error') or '翻译服务未返回译文'

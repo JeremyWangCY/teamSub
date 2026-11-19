@@ -42,6 +42,12 @@ APP_DIR = _data_home()
 DATA_DIR = Path(os.environ.get("TEAMSUB_DATA_DIR", APP_DIR))
 CONFIG_PATH = DATA_DIR / "appconfig.json"
 
+
+def _config_path() -> Path:
+    if CONFIG_PATH == DATA_DIR / "appconfig.json" and os.environ.get("TEAMSUB_DATA_DIR"):
+        return Path(os.environ["TEAMSUB_DATA_DIR"]) / "appconfig.json"
+    return CONFIG_PATH
+
 # ---------------------------------------------------------------------------
 # 凭据保护
 # ---------------------------------------------------------------------------
@@ -369,13 +375,13 @@ def all_glossary_pairs(cfg) -> list:
 
 
 def qa_check(source: str, translation: str, cfg, src: str, tgt: str) -> list:
-    """返回问题列表 [{type, detail}]。只报可机检的硬问题，不评判文风。"""
+    """返回问题列表 [{type, detail}]。只报可机检的硬问题，不评判文风或术语叫法。"""
     issues = []
     tr = (translation or "").strip()
     if not tr:
         return [{"type": "empty", "detail": "译文为空"}]
 
-    # 1) 数字一致性：原文里的数字必须原样出现在译文里
+    # 1) 数字与单位一致性：原文里的数字与量值必须原样出现在译文里
     sn, tn = extract_numbers(source), extract_numbers(tr)
     missing = sorted(sn - tn)
     if missing:
@@ -385,23 +391,11 @@ def qa_check(source: str, translation: str, cfg, src: str, tgt: str) -> list:
         issues.append({"type": "unit", "detail": "数值或单位未保留：" +
                        "、".join(f"{value} {unit}" for value, unit in sorted(missing_units)[:5])})
 
-    # 2) 术语合规：仅在开启强制模式时检查，且只查专有名词（多词或 ≥6 字符）
-    pairs = cfg.strict_terms() if hasattr(cfg, "strict_terms") else []
-    low_tr = tr.lower()
-    for k, v in pairs:
-        # 通用单字/短词（trim、gap 这类）语义随上下文变化，硬查会误伤正确译文
-        if len(k.split()) < 2 and len(k) < 6:
-            continue
-        if k.lower() in (source or "").lower() and v.lower() not in low_tr:
-            issues.append({"type": "term", "detail": f"术语未遵循：{k} → {v}"})
-        elif v.lower() in (source or "").lower() and k.lower() not in low_tr:
-            issues.append({"type": "term", "detail": f"术语未遵循：{v} → {k}"})
-
-    # 3) 疑似未翻译：译文与原文高度一致
+    # 2) 疑似未翻译：译文与原文高度一致
     if src != tgt and normalize_text(source).lower() == normalize_text(tr).lower():
         issues.append({"type": "untranslated", "detail": "疑似未翻译"})
 
-    # 4) 长度异常：过短像漏译，过长像模型加了解释
+    # 3) 长度异常：过短像漏译，过长像模型加了解释
     ls, lt = len(source or ""), len(tr)
     if ls >= 8 and lt < max(2, ls * 0.2):
         issues.append({"type": "short", "detail": f"译文过短（{lt}/{ls}）"})
@@ -548,9 +542,10 @@ class Config:
 
     @classmethod
     def load(cls) -> "Config":
-        if CONFIG_PATH.exists():
+        path = _config_path()
+        if path.exists():
             try:
-                data = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+                data = json.loads(path.read_text(encoding="utf-8"))
                 known = {f for f in cls.__dataclass_fields__}
                 clean = {}
                 for k, v in data.items():
@@ -570,7 +565,8 @@ class Config:
         return cls()
 
     def save(self) -> None:
-        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        path = _config_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
         data = asdict(self)
         # 密钥落盘前加密：配置文件是可读的 JSON，明文密钥等于把账号借给任何
         # 能读到这个文件的程序（同步盘、备份、误发的日志都算）。
@@ -580,7 +576,7 @@ class Config:
         for profile in data["engine_profiles"].values():
             if isinstance(profile, dict) and profile.get("api_key"):
                 profile["api_key"] = _protect(profile["api_key"])
-        CONFIG_PATH.write_text(
+        path.write_text(
             json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def topic_instruction(self) -> str:
@@ -932,11 +928,11 @@ def build_provider(cfg: Config, fallback=False) -> Provider:
     return cls(sub)
 
 
-def probe_reasoning(cfg: Config, level: str = "", timeout: float = 0) -> tuple:
+def probe_reasoning(cfg: Config, level: str = "", timeout: float = 0, persist: bool = True) -> tuple:
     """探测上游认哪个思考字段：返回 (字段名, 人话说明)。
 
     发一条极短请求，逐个尝试候选字段；被「不认识这个参数」拒绝就换下一个。
-    命中后写回 ``cfg.reasoning_field`` 并落盘，后续请求不必再失败重试。
+    命中后写回 ``cfg.reasoning_field`` 并落盘（persist=True 时），后续请求不必再失败重试。
     """
     if getattr(cfg, "engine", "openai") != "openai":
         return "", "当前引擎不支持思考参数（只有 OpenAI 兼容引擎有）"
@@ -967,10 +963,11 @@ def probe_reasoning(cfg: Config, level: str = "", timeout: float = 0) -> tuple:
         except TransientError as exc:
             return "", f"网络或服务异常：{exc}"
         cfg.reasoning_field = name
-        try:
-            cfg.save()
-        except Exception:
-            pass
+        if persist:
+            try:
+                cfg.save()
+            except Exception:
+                pass
         title = REASONING_TITLES.get(level, level)
         return name, f"上游接受 {name}（{title}档可用）"
     return "", "上游不接受任何思考参数，会按模型默认行为出字"

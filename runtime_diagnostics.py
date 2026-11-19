@@ -135,7 +135,12 @@ def _check_version(_directory):
         info = win32api.GetFileVersionInfo(sys.executable, '\\')
         return info['FileVersionMS'] != 0 or info['FileVersionLS'] != 0
     content = (_resource_directory() / 'version_info.txt').read_text(encoding='utf-8')
-    return bool(re.search(r'filevers=\(\d+,\s*\d+,\s*\d+,\s*\d+\)', content))
+    m_ffi = re.search(r'filevers=\((\d+),\s*(\d+),\s*(\d+),\s*\d+\)', content)
+    m_str = re.search(r"StringStruct\('FileVersion',\s*'(\d+\.\d+\.\d+)'\)", content)
+    if not m_ffi or not m_str:
+        return False
+    ffi_ver = '.'.join(m_ffi.groups())
+    return ffi_ver == m_str.group(1)
 
 
 def _checks():

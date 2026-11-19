@@ -85,7 +85,7 @@ RESOURCE_DIR = _resource_dir()  # 只读资源（随 exe 打包）
 # 常量放在模块顶层（而不是 pyproject/打包元数据里），是为了让源码运行、
 # 冻结成 exe 两种方式读到的都是同一个值。
 APP_DISPLAY_NAME = "TeamSub"
-APP_VERSION = "0.2.3"
+APP_VERSION = "0.2.4"
 
 CAPTION_DIR = Path(os.environ.get("TEAMSUB_DATA_DIR", APP_DIR)) / "captions"
 
@@ -1149,6 +1149,9 @@ class App:
             self.root.deiconify()
             self.root.lift()
             self.root.focus_force()
+            veil = getattr(self, "_veil", None)
+            if veil is not None and veil.veiled:
+                veil.reveal_soon()
         except Exception:
             pass
 
@@ -1320,10 +1323,15 @@ class App:
 
     def hide_float(self):
         """回到主界面：收起悬浮窗，恢复主窗口。"""
+        self._tray_hidden = False
+        self._was_iconic = False
         if self.float_bar is not None:
             self.float_bar.win.withdraw()
         self.root.deiconify()
         self.root.lift()
+        veil = getattr(self, "_veil", None)
+        if veil is not None and veil.veiled:
+            veil.reveal_soon()
 
     def _reconcile_window(self):
         """把 Tk 的内部状态与真实窗口状态对齐。
@@ -1354,12 +1362,12 @@ class App:
                 # 主窗口已被还原（点击任务栏、单实例接管、托盘都算）→ 收悬浮条
                 self._was_iconic = False
                 self._tray_hidden = False
-                if self.root.state() == "iconic":
+                if self.root.state() != "normal":
                     self.root.deiconify()
                 if self.float_bar is not None and self.float_on:
                     self.float_bar.win.withdraw()
                 return
-            if self.root.state() == "iconic":
+            if self.root.state() != "normal":
                 self.root.deiconify()
         except tk.TclError:
             pass
@@ -3044,31 +3052,38 @@ def _consume_exit_request(root):
 # 新启动的进程就彻底失去线索，只能弹一句「请到任务管理器结束」。所以启动
 # 时把 PID 写到磁盘：新实例照着 PID 反查进程，确实是个 python 就直接问一句
 # 「要不要结束它、启动新版本」，用户不必再开任务管理器。
+def _instance_file_path():
+    if os.environ.get("TEAMSUB_DATA_DIR"):
+        return Path(os.environ["TEAMSUB_DATA_DIR"]) / "cache" / "instance.pid"
+    return _INSTANCE_FILE
+
+
 def _write_instance_file():
     try:
-        _INSTANCE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _INSTANCE_FILE.write_text("%d %d" % (os.getpid(), int(time.time())),
-                                  encoding="utf-8")
+        path = _instance_file_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("%d %d" % (os.getpid(), int(time.time())),
+                        encoding="utf-8")
     except Exception:
         pass
 
 
 def _read_instance_pid() -> int:
     try:
-        return int(_INSTANCE_FILE.read_text(encoding="utf-8").split()[0])
+        return int(_instance_file_path().read_text(encoding="utf-8").split()[0])
     except Exception:
         return 0
 
 
 def _clear_instance_file():
     try:
-        _INSTANCE_FILE.unlink()
+        _instance_file_path().unlink()
     except Exception:
         pass
 
 
 def _pid_state(pid: int) -> str:
-    """进程状态：'none' 不存在 / 'python' 是 python 解释器 / 'other' 其它程序。
+    """进程状态：'none' 不存在 / 'python' 是 python 解释器或 TeamSub.exe / 'other' 其它程序。
 
     用 QueryFullProcessImageNameW 读映像名，比 WMI、psutil 都轻，也不受
     命令行长度限制。注意必须显式声明 argtypes：64 位下 HANDLE 若按默认
@@ -3096,7 +3111,7 @@ def _pid_state(pid: int) -> str:
             if not k32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)):
                 return "other"
             name = buf.value.lower().rsplit("\\", 1)[-1]
-            return "python" if name in ("python.exe", "pythonw.exe") else "other"
+            return "python" if name in ("python.exe", "pythonw.exe", "teamsub.exe") else "other"
         finally:
             k32.CloseHandle(h)
     except Exception:
@@ -3140,54 +3155,54 @@ def _kill_instance(pid: int) -> bool:
 
 
 def _find_orphan_pids():
-    """反查残留的 teamsub.py 进程（排除自己与自己的祖先进程）。
+    """反查残留的 teamsub.py / TeamSub.exe 进程（排除自己与自己的祖先进程）。
 
-    注意 venv 的 pythonw.exe 是转发器：它用同样的命令行再起一个基础解释器，
-    父子两个进程的命令行都含 teamsub.py。若按命令行盲杀，很可能把「自己的
-    父进程」当成残留实例干掉（/T 会连同自己一起收）。所以必须顺着
+    注意 venv 的 pythonw.exe 和单文件 PyInstaller 的 TeamSub.exe 都是父子结构：
+    父子两个进程的命令行都含 teamsub.py 或 TeamSub.exe。若按命令行盲杀，很可能把
+    「自己的父进程」当成残留实例干掉（/T 会连同自己一起收）。所以必须顺着
     ParentProcessId 往上找到自己的祖先链，逐个排除。
     """
     import subprocess
     me = os.getpid()
     rows = {}
     try:
-        script = ("Get-CimInstance Win32_Process -Filter \"Name like 'python%'\""
+        script = ("Get-CimInstance Win32_Process -Filter \"Name like 'python%' or Name = 'TeamSub.exe'\""
                   " | ForEach-Object { \"$($_.ProcessId)|$($_.ParentProcessId)"
-                  "|$($_.CommandLine)\" }")
+                  "|$($_.Name)|$($_.CommandLine)\" }")
         res = subprocess.run(["powershell", "-NoProfile", "-NonInteractive",
                               "-Command", script],
                              capture_output=True, text=True, timeout=20,
                              creationflags=0x08000000)
         for line in (res.stdout or "").splitlines():
-            parts = line.split("|", 2)
-            if len(parts) != 3:
+            parts = line.split("|", 3)
+            if len(parts) != 4:
                 continue
             try:
                 pid, ppid = int(parts[0]), int(parts[1])
             except ValueError:
                 continue
-            rows[pid] = (ppid, parts[2])
+            rows[pid] = (ppid, parts[2], parts[3])
     except Exception:
         pass
 
     ancestors, cur = {me}, me
     for _ in range(8):
-        nxt = rows.get(cur, (0, ""))[0]
+        nxt = rows.get(cur, (0, "", ""))[0]
         if not nxt or nxt in ancestors:
             break
         ancestors.add(nxt)
         cur = nxt
 
-    # 只认命令行里带 teamsub.py 的进程；PID 文件若有更快的线索就置顶
-    cands = [p for p, (_pp, cmd) in rows.items()
-             if "teamsub.py" in cmd.lower() and p not in ancestors]
+    # 只认命令行里带 teamsub.py 或进程名为 teamsub.exe 的进程；PID 文件若有更快的线索就置顶
+    cands = [p for p, (_pp, name, cmd) in rows.items()
+             if ("teamsub.py" in cmd.lower() or name.lower() == "teamsub.exe")
+             and p not in ancestors]
     hint = _read_instance_pid()
     if hint in cands:
         cands.remove(hint)
         cands.insert(0, hint)
-    if not rows:                      # WMI 不可用时的尽力而为
-        if hint and hint not in ancestors and _pid_state(hint) == "python":
-            cands.append(hint)
+    elif hint and hint not in ancestors and _pid_state(hint) == "python":
+        cands.insert(0, hint)
     return [p for p in cands if _pid_state(p) == "python"]
 
 
@@ -3382,7 +3397,7 @@ def _acquire_single_instance() -> bool:
                 user32.MessageBoxW(
                     None,
                     "TeamSub 已在运行，但未找到它的窗口。\n\n"
-                    "请打开任务管理器 →「详细信息」页，结束 pythonw.exe，再试一次。",
+                    "请打开任务管理器 →「详细信息」页，结束 TeamSub.exe（或 pythonw.exe），再试一次。",
                     "TeamSub", 0x30)           # MB_ICONWARNING
                 return False
             ans = user32.MessageBoxW(

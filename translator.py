@@ -162,6 +162,94 @@ def all_topics(cfg=None) -> dict:
     return out
 
 
+def format_topic_export(topic: dict) -> dict:
+    """把单个主题整理为便于发给 AI 仿写或跨机分享的 JSON 结构。"""
+    glossary_raw = (topic.get("glossary") or "").strip()
+    glossary_list = [line.strip() for line in glossary_raw.splitlines() if line.strip()]
+    return {
+        "name": (topic.get("name") or "未命名主题").strip(),
+        "brief": (topic.get("brief") or "").strip(),
+        "glossary": glossary_list,
+    }
+
+
+def _normalize_glossary(value) -> str:
+    """兼容字符串（换行分隔）、字符串列表（['a=b']）或字典（{'a': 'b'}）三种 AI 常见输出格式。"""
+    lines = []
+    if isinstance(value, str):
+        raw_lines = value.splitlines()
+    elif isinstance(value, list):
+        raw_lines = [str(item) for item in value if item is not None]
+    elif isinstance(value, dict):
+        raw_lines = [f"{k}={v}" for k, v in value.items()]
+    else:
+        raise ValueError("glossary 格式无效，应为字符串、列表或键值对字典")
+    for line in raw_lines:
+        s = line.strip()
+        if not s:
+            continue
+        if "=" not in s and "：" in s:
+            s = s.replace("：", "=", 1)
+        elif "=" not in s and ":" in s:
+            s = s.replace(":", "=", 1)
+        if "=" not in s or not all(part.strip() for part in s.split("=", 1)):
+            raise ValueError(f"译名对照「{s[:40]}」格式无效，请按「原文=译文」填写")
+        k, v = s.split("=", 1)
+        lines.append(f"{k.strip()}={v.strip()}")
+    return "\n".join(lines)
+
+
+def parse_topics_import(raw_text: str) -> list[dict]:
+    """解析导入的 JSON 文本（支持含 ```json 代码块），返回 [{'name', 'brief', 'glossary'}]。
+
+    支持三种常见顶层结构：
+      1. 单个主题对象：{"name": "...", "brief": "...", "glossary": "..." / [...]}
+      2. 主题数组：[{"name": "...", ...}, ...]
+      3. 包含 topics 字段或键值映射的对象：{"topics": [...]} 或 {"key1": {"name": ...}}
+    """
+    text = (raw_text or "").strip()
+    text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.I | re.M).strip()
+    if not text:
+        raise ValueError("文件内容为空")
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"JSON 格式无法解析（第 {exc.lineno} 行）：{exc.msg}") from None
+
+    items = []
+    if isinstance(data, list):
+        items = data
+    elif isinstance(data, dict):
+        if "name" in data or "brief" in data or "glossary" in data:
+            items = [data]
+        elif isinstance(data.get("topics"), list):
+            items = data["topics"]
+        elif isinstance(data.get("topics"), dict):
+            items = [{"name": k, **v} if isinstance(v, dict) else v
+                     for k, v in data["topics"].items()]
+        else:
+            items = [{"name": k, **v} if isinstance(v, dict) else v
+                     for k, v in data.items()]
+    else:
+        raise ValueError("JSON 顶层必须是对象或数组")
+
+    parsed = []
+    for idx, item in enumerate(items, 1):
+        if not isinstance(item, dict):
+            raise ValueError(f"第 {idx} 项不是有效的主题对象")
+        name = str(item.get("name") or item.get("title") or "").strip()
+        brief = str(item.get("brief") or item.get("description") or item.get("prompt") or "").strip()
+        glossary = _normalize_glossary(item.get("glossary") or item.get("terms") or "")
+        if not name:
+            if not brief and not glossary:
+                continue
+            name = f"导入主题 {idx}"
+        parsed.append({"name": name[:40], "brief": brief, "glossary": glossary})
+    if not parsed:
+        raise ValueError("未在文件中找到有效的主题（需包含 name、brief 或 glossary）")
+    return parsed
+
+
 # 短于此长度的文本不带上下文，减少简短口头语的输入开销。
 DEFAULT_CTX_MIN_LEN = 12
 

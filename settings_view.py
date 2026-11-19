@@ -1,10 +1,14 @@
 import copy
+import json
+from pathlib import Path
+import re
 import threading
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import filedialog, messagebox
 import ui_kit as UK
 from translator import (all_topics, TOPICS, TranslationService,
-                        REASONING_LABELS, REASONING_TITLES)
+                        REASONING_LABELS, REASONING_TITLES,
+                        format_topic_export, parse_topics_import)
 import translator as TR
 
 def open_settings(self, page="服务"):
@@ -492,15 +496,78 @@ def open_settings(self, page="服务"):
                 load_fields(state["key"])
                 refresh(state["key"])
 
+        def do_export_topic():
+            snapshot()
+            k = state["key"]
+            if not k or k not in topics:
+                return
+            t = topics[k]
+            payload = format_topic_export(t)
+            safe_name = re.sub(r'[\\/:*?"<>|]+', "_", payload["name"]).strip(" ._") or "topic"
+            path = filedialog.asksaveasfilename(
+                parent=self.root,
+                title="导出当前主题（JSON，可发给 AI 仿写）",
+                defaultextension=".json",
+                initialfile=f"TeamSub_主题_{safe_name}.json",
+                filetypes=[("JSON 文件", "*.json"), ("所有文件", "*.*")])
+            if not path:
+                return
+            try:
+                Path(path).write_text(
+                    json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8")
+                self.flash(f"已导出主题「{payload['name']}」")
+            except OSError as exc:
+                messagebox.showerror("导出主题", f"导出失败：{exc}", parent=self.root)
+
+        def do_import_topic():
+            snapshot()
+            path = filedialog.askopenfilename(
+                parent=self.root,
+                title="导入主题（JSON）",
+                filetypes=[("JSON 文件", "*.json"), ("所有文件", "*.*")])
+            if not path:
+                return
+            try:
+                raw = Path(path).read_text(encoding="utf-8-sig")
+                imported = parse_topics_import(raw)
+            except (OSError, UnicodeError, ValueError) as exc:
+                messagebox.showerror("导入主题", f"无法导入该文件：\n{exc}", parent=self.root)
+                return
+            last_key = state["key"]
+            for item in imported:
+                existing_key = next(
+                    (k for k in order if k in topics
+                     and (topics[k].get("name") or "").strip() == item["name"]),
+                    None)
+                if existing_key is not None:
+                    if messagebox.askyesno(
+                            "同名主题已存在",
+                            f"已存在名为「{item['name']}」的主题。\n\n"
+                            "是：覆盖该主题的内容\n"
+                            "否：作为新主题导入",
+                            parent=self.root):
+                        topics[existing_key] = {**item, "custom": True}
+                        last_key = existing_key
+                        continue
+                k = new_key("import")
+                topics[k] = {**item, "custom": True}
+                order.append(k)
+                last_key = k
+            refresh(last_key)
+            self.flash(f"已导入 {len(imported)} 个主题，点击右下角「保存」后生效")
+
         for text, cmd, icon, tip in (("新建", do_new, "plus", "新建空白主题"),
                                      ("复制", do_clone, "copy", "以当前主题为模板复制一份"),
                                      ("删除", do_delete, "trash", None),
-                                     ("重置", do_reset, "undo", "内置主题恢复为默认内容")):
+                                     ("重置", do_reset, "undo", "内置主题恢复为默认内容"),
+                                     ("导入", do_import_topic, "download", "从 JSON 文件导入 AI 编写的主题"),
+                                     ("导出", do_export_topic, "export", "把当前主题导出为 JSON（可作为模板发给 AI）")):
             UK.Pill(tb, text, cmd, kind="ghost", icon=icon, icon_size=14, tooltip=tip,
-                    height=30, padx=10, bg=W).pack(side="left", padx=(0, 2))
+                    height=30, padx=8, bg=W).pack(side="left", padx=(0, 2))
         btn_restore = UK.Pill(tb, "恢复内置", do_restore, kind="ghost", icon="restore",
                               icon_size=14, tooltip="找回已删除的内置主题",
-                              height=30, padx=10, bg=W)
+                              height=30, padx=8, bg=W)
         btn_restore.pack(side="left", padx=(0, 4))
 
         def collect():

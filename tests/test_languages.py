@@ -51,6 +51,46 @@ class DetectTests(unittest.TestCase):
         missing_num = T.qa_check("The gap is 3.5 mm", "间隙合适", cfg, "en", "zh")
         self.assertTrue(any(i["type"] == "number" for i in missing_num))
 
+    def test_topic_export_and_import_formats(self):
+        exported = T.format_topic_export({
+            "name": "车身设计",
+            "brief": "汽车车身开发与供应商评审",
+            "glossary": "body-in-white=白车身\nflush=面差\n",
+        })
+        self.assertEqual(exported, {
+            "name": "车身设计",
+            "brief": "汽车车身开发与供应商评审",
+            "glossary": ["body-in-white=白车身", "flush=面差"],
+        })
+        import json
+        # 1) 导出格式原样导入
+        parsed = T.parse_topics_import(json.dumps(exported, ensure_ascii=False))
+        self.assertEqual(parsed, [{
+            "name": "车身设计",
+            "brief": "汽车车身开发与供应商评审",
+            "glossary": "body-in-white=白车身\nflush=面差",
+        }])
+        # 2) AI 常见输出：带 ```json 代码块、数组 + 字典形式 glossary + 冒号分隔
+        ai_text = """```json
+        [
+          {
+            "name": "电池包",
+            "brief": "动力电池系统评审",
+            "glossary": {"cell-to-pack": "CTP 无模组", "thermal runaway": "热失控"}
+          },
+          {
+            "name": "底盘",
+            "brief": "悬架与转向调校",
+            "glossary": ["control arm: 控制臂", "knuckle：转向节"]
+          }
+        ]
+        ```"""
+        parsed_multi = T.parse_topics_import(ai_text)
+        self.assertEqual(len(parsed_multi), 2)
+        self.assertEqual(parsed_multi[0]["name"], "电池包")
+        self.assertIn("cell-to-pack=CTP 无模组", parsed_multi[0]["glossary"])
+        self.assertEqual(parsed_multi[1]["glossary"], "control arm=控制臂\nknuckle=转向节")
+
 
 class PickerTests(unittest.TestCase):
     def setUp(self):

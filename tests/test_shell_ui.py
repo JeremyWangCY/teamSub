@@ -328,6 +328,44 @@ class WatchdogAndSettingsGuardTests(ShellTestCase):
         finally:
             A.messagebox.askyesno = orig_ask
 
+    def test_topic_toolbar_export_and_import_ui(self):
+        """设置 → 主题页支持将当前主题导出为 JSON 并从 JSON 导入新主题。"""
+        import tempfile
+        from pathlib import Path
+        import settings_view as SV
+        self.start()
+        self.app.open_settings(page='主题')
+        self.pump()
+        pills = {w.text: w for w in self.walk(self.app.sheet_layer) if isinstance(w, UK.Pill)}
+        self.assertIn('导入', pills)
+        self.assertIn('导出', pills)
+        with tempfile.TemporaryDirectory() as tmp:
+            out_path = Path(tmp) / 'topic.json'
+            orig_save = SV.filedialog.asksaveasfilename
+            orig_open = SV.filedialog.askopenfilename
+            SV.filedialog.asksaveasfilename = lambda **k: str(out_path)
+            try:
+                pills['导出'].command()
+                self.assertTrue(out_path.is_file())
+                data = json.loads(out_path.read_text(encoding='utf-8'))
+                self.assertIn('name', data)
+                self.assertIn('brief', data)
+                self.assertIsInstance(data['glossary'], list)
+                # 修改名称后导入为新主题
+                data['name'] = 'AI 生成的测试主题'
+                data['glossary'] = ['test term=测试术语']
+                out_path.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8')
+                SV.filedialog.askopenfilename = lambda **k: str(out_path)
+                pills['导入'].command()
+                self.pump()
+                pick_lists = [w for w in self.walk(self.app.sheet_layer) if isinstance(w, UK.PickList)]
+                self.assertEqual(len(pick_lists), 1)
+                labels = [item[1] for item in pick_lists[0].items]
+                self.assertIn('AI 生成的测试主题', labels)
+            finally:
+                SV.filedialog.asksaveasfilename = orig_save
+                SV.filedialog.askopenfilename = orig_open
+
 
 class FloatBarLifecycleTests(ShellTestCase):
     def test_minimize_auto_float_and_restore_resets_float_state(self):

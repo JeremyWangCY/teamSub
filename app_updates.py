@@ -17,6 +17,7 @@ import urllib.request
 REPOSITORY = "JeremyWangCY/teamSub"
 RELEASES_URL = f"https://github.com/{REPOSITORY}/releases"
 LATEST_API_URL = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"
+LATEST_WEB_URL = f"{RELEASES_URL}/latest"
 MAX_RESPONSE_BYTES = 1024 * 1024
 MAX_INSTALLER_BYTES = 512 * 1024 * 1024
 MIN_FREE_BYTES = 128 * 1024 * 1024
@@ -97,6 +98,58 @@ def _release_asset(data, version, tag):
     return asset
 
 
+def _check_latest_via_web():
+    """Fallback when api.github.com hits anonymous IP rate limits (HTTP 403/429)."""
+    prefix = f"{RELEASES_URL}/tag/"
+    request = urllib.request.Request(LATEST_WEB_URL, method="HEAD", headers={
+        "User-Agent": "TeamSub-update-check",
+    })
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            final_url = response.geturl()
+        if not _trusted_download_url(final_url) or not final_url.startswith(prefix):
+            raise ValueError("unexpected release URL")
+        tag = final_url.removeprefix(prefix)
+        version_tuple(tag)
+        version = tag.removeprefix("v")
+        release_url = f"{RELEASES_URL}/tag/{tag}"
+    except (OSError, urllib.error.URLError, http.client.HTTPException, ValueError):
+        raise UpdateCheckError("GitHub 请求受限，请稍后重试") from None
+
+    filename = f"TeamSub-Setup-{version}.exe"
+    installer_url = f"{RELEASES_URL}/download/{tag}/{filename}"
+    asset = None
+    try:
+        sums_url = f"{RELEASES_URL}/download/{tag}/SHA256SUMS.txt"
+        sums_req = urllib.request.Request(sums_url, headers={"User-Agent": "TeamSub-update-check"})
+        with urllib.request.urlopen(sums_req, timeout=10) as response:
+            if not _trusted_download_url(response.geturl()):
+                raise ValueError("untrusted checksum URL")
+            sums_raw = response.read(65536).decode("utf-8", "replace")
+        pattern = re.compile(rf"^\s*([a-fA-F0-9]{{64}})\s+{re.escape(filename)}\s*$")
+        sha256 = None
+        for line in sums_raw.splitlines():
+            match = pattern.match(line)
+            if match:
+                sha256 = match.group(1).lower()
+                break
+        if sha256:
+            head_req = urllib.request.Request(installer_url, method="HEAD", headers={
+                "User-Agent": "TeamSub-update-check",
+            })
+            with urllib.request.urlopen(head_req, timeout=10) as response:
+                if not _trusted_download_url(response.geturl()):
+                    raise ValueError("untrusted asset URL")
+                declared = response.headers.get("Content-Length")
+            size = int(declared) if declared and str(declared).isdigit() else 0
+            candidate = InstallerAsset(filename, installer_url, size, sha256)
+            _validate_asset(Release(version, release_url, candidate))
+            asset = candidate
+    except Exception:
+        asset = None
+    return Release(version, release_url, asset)
+
+
 def check_latest_release():
     request = urllib.request.Request(LATEST_API_URL, headers={
         "Accept": "application/vnd.github+json",
@@ -107,8 +160,9 @@ def check_latest_release():
         with urllib.request.urlopen(request, timeout=10) as response:
             raw = response.read(MAX_RESPONSE_BYTES + 1)
     except urllib.error.HTTPError as exc:
-        message = {404: "尚未找到正式发布版本", 403: "GitHub 请求受限，请稍后重试",
-                   429: "GitHub 请求受限，请稍后重试"}.get(exc.code, "GitHub 暂时不可用，请稍后重试")
+        if exc.code in (403, 429):
+            return _check_latest_via_web()
+        message = {404: "尚未找到正式发布版本"}.get(exc.code, "GitHub 暂时不可用，请稍后重试")
         raise UpdateCheckError(message) from None
     except (OSError, urllib.error.URLError, http.client.HTTPException):
         raise UpdateCheckError("无法连接 GitHub，请检查网络后重试") from None

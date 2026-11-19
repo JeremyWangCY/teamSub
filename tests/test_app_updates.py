@@ -77,5 +77,38 @@ class UpdateTests(unittest.TestCase):
         with patch.object(U.urllib.request,'urlopen',return_value=payload(assets=[base,base])):
             with self.assertRaises(U.UpdateCheckError):U.check_latest_release()
 
+    def test_rate_limited_api_falls_back_to_web_release_and_checksums(self):
+        class FakeResponse(io.BytesIO):
+            def __init__(self, data=b'', *, url='', headers=None):
+                super().__init__(data)
+                self._url = url
+                self.headers = dict(headers or {})
+            def geturl(self):
+                return self._url
+
+        digest = 'ab' * 32
+        sums_body = f"{digest}  TeamSub-Setup-0.2.6.exe\n".encode('utf-8')
+        def fake_urlopen(req, timeout=10):
+            url = req.full_url if hasattr(req, 'full_url') else req
+            if url == U.LATEST_API_URL:
+                raise urllib.error.HTTPError(U.LATEST_API_URL, 403, 'rate limit', None, None)
+            if url == U.LATEST_WEB_URL:
+                return FakeResponse(url=f'{U.RELEASES_URL}/tag/v0.2.6')
+            if url == f'{U.RELEASES_URL}/download/v0.2.6/SHA256SUMS.txt':
+                return FakeResponse(sums_body, url='https://release-assets.githubusercontent.com/sums')
+            if url == f'{U.RELEASES_URL}/download/v0.2.6/TeamSub-Setup-0.2.6.exe':
+                return FakeResponse(url='https://release-assets.githubusercontent.com/installer',
+                                    headers={'Content-Length': '25000000'})
+            raise AssertionError(f'Unexpected URL: {url}')
+
+        with patch.object(U.urllib.request, 'urlopen', side_effect=fake_urlopen):
+            release = U.check_latest_release()
+        self.assertEqual(release, U.Release(
+            '0.2.6',
+            f'{U.RELEASES_URL}/tag/v0.2.6',
+            U.InstallerAsset('TeamSub-Setup-0.2.6.exe',
+                             f'{U.RELEASES_URL}/download/v0.2.6/TeamSub-Setup-0.2.6.exe',
+                             25000000, digest)))
+
 
 if __name__=='__main__':unittest.main(verbosity=2)

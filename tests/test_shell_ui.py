@@ -32,6 +32,7 @@ class ShellTestCase(unittest.TestCase):
         except tk.TclError:
             pass
         A.session_stamp_path().unlink(missing_ok=True)
+        support.T.Config(enabled=False).save()
         self.assertEqual(self.errors, [])
 
     def pump(self, seconds=.12):
@@ -326,4 +327,59 @@ class WatchdogAndSettingsGuardTests(ShellTestCase):
             self.assertEqual(len(asked), 1)
         finally:
             A.messagebox.askyesno = orig_ask
+
+
+class FloatBarLifecycleTests(ShellTestCase):
+    def test_minimize_auto_float_and_restore_resets_float_state(self):
+        """最小化自动切悬浮窗不污染磁盘配置，还原后立即把开关复位，再点一次即可打开。"""
+        self.start()
+        app = self.app
+        app.tcfg.float_on_min = True
+        app.tcfg.float_bar = False
+        app.tcfg.save()
+        app._on_minimize()
+        self.pump()
+        self.assertTrue(app._float_visible())
+        self.assertFalse(support.T.Config.load().float_bar)
+        app._on_restore()
+        self.pump()
+        self.assertFalse(app._float_visible())
+        self.assertFalse(app.float_on)
+        app.toggle_float()
+        self.pump()
+        self.assertTrue(app._float_visible())
+        self.assertTrue(app.float_on)
+
+    def test_closing_float_bar_while_main_hidden_reveals_veil_and_clears_tray_flags(self):
+        """主窗口隐藏在托盘/遮罩下时关闭悬浮窗，主窗口恢复可见且解除透明遮罩。"""
+        self.start()
+        app = self.app
+        app._tray_hidden = True
+        app._was_iconic = True
+        if app._veil is not None:
+            app._veil.hide()
+        app.root.withdraw()
+        app.set_float(True)
+        self.pump()
+        app.set_float(False)
+        self.pump(.25)
+        self.assertEqual(app._win_state(app.root), 'normal')
+        self.assertFalse(app._tray_hidden)
+        self.assertFalse(app._was_iconic)
+        if app._veil is not None:
+            self.assertFalse(app._veil.veiled)
+
+    def test_float_bar_repaint_preserves_dragged_position(self):
+        """切换主题或重绘悬浮窗时保留拖拽后的屏幕坐标。"""
+        self.start()
+        app = self.app
+        app.set_float(True)
+        self.pump()
+        app.float_bar.win.geometry('+123+234')
+        self.pump()
+        app.float_bar.repaint()
+        self.pump()
+        self.assertEqual(app.float_bar.win.winfo_x(), 123)
+        self.assertEqual(app.float_bar.win.winfo_y(), 234)
+
 

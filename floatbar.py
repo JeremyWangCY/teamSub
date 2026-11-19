@@ -25,7 +25,7 @@ RADIUS = 8               # 悬浮窗的四角使用同一半径
 class FloatBar:
     """悬浮字幕条。由 App 创建/销毁，数据通过 sync() 灌入。"""
 
-    def __init__(self, app):
+    def __init__(self, app, pos=None):
         self.app = app
         self.win = tk.Toplevel(app.root)
         w = self.win
@@ -46,7 +46,15 @@ class FloatBar:
         self.user_h = max(0, int(getattr(cfg, "float_h", 0) or 0))
         self.h = max(MIN_H, self.user_h or H)
         # self.w/self.h 都是逻辑像素，只在落到窗口几何时换算
-        w.geometry(f"{UK.px(self.w)}x{UK.px(self.h)}+{w.winfo_screenwidth() - UK.px(self.w + 48)}+{UK.px(96)}")
+        pw, ph = UK.px(self.w), UK.px(self.h)
+        saved_pos = pos if pos is not None else getattr(app, "_float_pos", None)
+        if saved_pos is not None:
+            x = max(0, min(int(saved_pos[0]), max(0, w.winfo_screenwidth() - pw)))
+            y = max(0, min(int(saved_pos[1]), max(0, w.winfo_screenheight() - ph)))
+        else:
+            x = max(0, w.winfo_screenwidth() - UK.px(self.w + 48))
+            y = UK.px(96)
+        w.geometry(f"{pw}x{ph}+{x}+{y}")
 
         # 拖动记录
         self._drag = None
@@ -348,7 +356,7 @@ class FloatBar:
             self._apply_wrap()
             self.card.update_idletasks()
             content_h = UK.lpx(self.content.winfo_reqheight())
-            viewport_h = max(30, UK.lpx(self.content_canvas.winfo_height()))
+            viewport_h = max(30, self.content_canvas.winfo_height())
             needs_scroll = content_h > viewport_h
             if needs_scroll != bool(self.scroll.winfo_manager()):
                 if needs_scroll:
@@ -387,12 +395,20 @@ class FloatBar:
         self._round_window()
         return "break"
 
+    def _save_pos(self):
+        try:
+            if self.win.winfo_exists():
+                self.app._float_pos = (self.win.winfo_x(), self.win.winfo_y())
+        except tk.TclError:
+            pass
+
     def _resize_release(self, _=None):
         if not self._resize:
             return "break"
         self._resize = None
         self._fit()                     # 内容比拖出来的高度更高时自动补足
         self._save_size()
+        self._save_pos()
         return "break"
 
     def _save_size(self):
@@ -420,6 +436,7 @@ class FloatBar:
 
     def _release(self, _):
         self._drag = None
+        self._save_pos()
 
     def back_to_main(self):
         self.app.hide_float()
@@ -451,13 +468,21 @@ class FloatBar:
     def repaint(self):
         """主题切换后整体重建（App 负责调用）。"""
         w, h, user_h = self.w, self.h, self.user_h
+        self._save_pos()
+        pos = getattr(self.app, "_float_pos", None)
         self.destroy()
-        bar = FloatBar(self.app)
+        bar = FloatBar(self.app, pos=pos)
         bar.w, bar.h, bar.user_h = w, h, user_h
         try:
-            # 新实例按配置值建窗，这里要按旧的实时尺寸摆回去（_fit 会因
+            # 新实例按配置值建窗，这里要按旧的实时尺寸与位置摆回去（_fit 会因
             # 「尺寸没变」提前返回，不会替我们改窗口）
-            bar.win.geometry(f"{UK.px(w)}x{UK.px(h)}+{bar.win.winfo_x()}+{bar.win.winfo_y()}")
+            pw, ph = UK.px(w), UK.px(h)
+            if pos is not None:
+                px_x = max(0, min(int(pos[0]), max(0, bar.win.winfo_screenwidth() - pw)))
+                px_y = max(0, min(int(pos[1]), max(0, bar.win.winfo_screenheight() - ph)))
+                bar.win.geometry(f"{pw}x{ph}+{px_x}+{px_y}")
+            else:
+                bar.win.geometry(f"{pw}x{ph}+{bar.win.winfo_x()}+{bar.win.winfo_y()}")
         except tk.TclError:
             pass
         bar._apply_wrap()
@@ -467,6 +492,7 @@ class FloatBar:
         self.app.float_sync(force=True)   # 新实例标签为空，强制灌一次
 
     def destroy(self):
+        self._save_pos()
         try:
             self.win.destroy()
         except Exception:

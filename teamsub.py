@@ -85,7 +85,7 @@ RESOURCE_DIR = _resource_dir()  # 只读资源（随 exe 打包）
 # 常量放在模块顶层（而不是 pyproject/打包元数据里），是为了让源码运行、
 # 冻结成 exe 两种方式读到的都是同一个值。
 APP_DISPLAY_NAME = "TeamSub"
-APP_VERSION = "0.2.4"
+APP_VERSION = "0.2.5"
 
 CAPTION_DIR = Path(os.environ.get("TEAMSUB_DATA_DIR", APP_DIR)) / "captions"
 
@@ -907,6 +907,8 @@ class App:
         self._status_code = None
         self.float_bar = None            # 悬浮字幕窗实例
         self._float_sig = None            # 最近一次同步的内容指纹
+        self._float_auto = False          # 悬浮窗是由最小化/收托盘自动唤起的
+        self._float_pos = None            # 记住悬浮窗上次所在位置 (x, y)
         self._hidden_since = 0.0          # 「一个窗口都没有」的起始时刻（看门狗用）
         self._closing = False             # 已确认退出：看门狗/采集回调全部停手
         self._quit_pending = False        # 退出流程进行中，但还可能被取消
@@ -955,7 +957,7 @@ class App:
         if self.tcfg.enabled and self._has_credentials():
             self.start_translation(silent=True)
         if self.float_on:
-            self.float_bar = floatbar.FloatBar(self)
+            self.float_bar = floatbar.FloatBar(self, pos=self._float_pos)
             self.float_sync(force=True)
         self._veil = RestoreVeil(self.root) if sys.platform == "win32" else None
         self.root.bind("<Unmap>", self._on_minimize)
@@ -1017,13 +1019,7 @@ class App:
             return
         self._min_switching = True
         try:
-            if getattr(self.tcfg, "float_on_min", False):
-                self.set_float(True)
-                if self.float_bar is not None:
-                    self.float_bar.win.deiconify()
-                    self.float_bar.win.lift()
-                    if self._float_visible():
-                        self.float_sync(force=True)
+            self._show_auto_float()
             self._was_iconic = True     # 供 _on_restore / _reconcile 判断
             if self._win_state(self.root) != "iconic":
                 self.root.iconify()
@@ -1052,6 +1048,7 @@ class App:
         self._was_iconic = True
         try:
             self.root.withdraw()
+            self._show_auto_float()
             self._tray_hint()
         except tk.TclError:
             self._tray_hidden = False
@@ -1143,8 +1140,7 @@ class App:
         """从托盘/悬浮条回到主界面。"""
         self._tray_hidden = False
         self._was_iconic = False
-        if self.float_bar is not None and self.float_on:
-            self.float_bar.win.withdraw()
+        self._withdraw_float()
         try:
             self.root.deiconify()
             self.root.lift()
@@ -1168,8 +1164,7 @@ class App:
             return
         self._was_iconic = False
         self._tray_hidden = False
-        if self.float_bar is not None and self.float_on:
-            self.float_bar.win.withdraw()
+        self._withdraw_float()
 
     # ---------------- UI ----------------
     def _build_ui(self):
@@ -1264,52 +1259,115 @@ class App:
         self._show_sheet("确认", build, push=push)
 
     # ---------------- 悬浮窗 ----------------
-    def set_float(self, on: bool):
-        """开/关悬浮窗；开启时若主窗口可见则保持并存，最小化才自动切换。"""
-        on = bool(on)
-        if on and self.float_on and self.float_bar is not None:
-            # 条子可能被临时收起过（从任务栏还原主窗口时会收条）。此时开关
-            # 仍是「开」，直接 return 会让开关与可见性永久不一致，用户再也
-            # 叫不出条子。所以这里要把它重新露出来。
+    def _show_auto_float(self):
+        """在开启「最小化时切到悬浮窗」时自动弹出悬浮窗（不污染持久配置）。"""
+        if not getattr(self.tcfg, "float_on_min", False):
+            return
+        if not self.float_on:
+            self._float_auto = True
+            self.set_float(True, persist=False, silent=True)
+        elif self.float_bar is not None:
             try:
                 self.float_bar.win.deiconify()
                 self.float_bar.win.lift()
+                if self._float_visible():
+                    self.float_sync(force=True)
             except Exception:
                 pass
+
+    def _withdraw_float(self):
+        """回到主界面时收起悬浮窗，并让开关状态与真实可见性保持一致。"""
+        bar = getattr(self, "float_bar", None)
+        if bar is not None:
+            try:
+                if bar.win.winfo_exists():
+                    self._float_pos = (bar.win.winfo_x(), bar.win.winfo_y())
+                    bar.win.withdraw()
+            except Exception:
+                pass
+        was_auto = getattr(self, "_float_auto", False)
+        self._float_auto = False
+        self.float_on = False
+        if not was_auto and getattr(self.tcfg, "float_bar", False):
+            self.tcfg.float_bar = False
+            try:
+                self.tcfg.save()
+            except Exception:
+                pass
+        if getattr(self, "var_float", None) is not None:
+            try:
+                self.var_float.set(False)
+            except Exception:
+                pass
+
+    def set_float(self, on: bool, persist: bool = True, silent: bool = False):
+        """开/关悬浮窗；开启时若主窗口可见则保持并存，最小化才自动切换。"""
+        on = bool(on)
+        if on and self.float_on and self.float_bar is not None:
+            # 条子可能被临时收起过。若用户显式打开，转为持久化并重新露出来。
+            if persist and (getattr(self, "_float_auto", False)
+                            or not getattr(self.tcfg, "float_bar", False)):
+                self._float_auto = False
+                self.tcfg.float_bar = True
+                try:
+                    self.tcfg.save()
+                except Exception:
+                    pass
+            try:
+                self.float_bar.win.deiconify()
+                self.float_bar.win.lift()
+                self.float_sync(force=True)
+            except Exception:
+                pass
+            if getattr(self, "var_float", None) is not None:
+                try:
+                    self.var_float.set(True)
+                except Exception:
+                    pass
             return
         if not on and not self.float_on and self.float_bar is None:
             return                      # 已关着，别重复拆
         self.float_on = on
-        self.tcfg.float_bar = on
-        try:
-            self.tcfg.save()
-        except Exception:
-            pass
+        if persist:
+            self._float_auto = False
+            self.tcfg.float_bar = on
+            try:
+                self.tcfg.save()
+            except Exception:
+                pass
         if on:
             if self.float_bar is None:
-                self.float_bar = floatbar.FloatBar(self)
+                self.float_bar = floatbar.FloatBar(self, pos=getattr(self, "_float_pos", None))
             self.float_bar.win.deiconify()
+            self.float_bar.win.lift()
             self.float_sync(force=True)     # 新条子是空的，必须灌一次
-            self.flash("悬浮字幕窗已开启")
+            if getattr(self, "var_float", None) is not None:
+                try:
+                    self.var_float.set(True)
+                except Exception:
+                    pass
+            if not silent:
+                self.flash("悬浮字幕窗已开启")
         else:
+            self._float_auto = False
             if self.float_bar is not None:
                 self.float_bar.destroy()
                 self.float_bar = None
-            # 关闭悬浮条后必须保证还留着一个可见窗口。若主窗口此时仍是隐藏
-            # 状态（最小化切到悬浮条后，用户点了悬浮条上的 ✕），进程就会变成
-            # 「活着但零窗口」的隐形实例，继续占着单实例锁——用户既看不到
-            # 界面，也启动不了新版本。这里主动把主窗口收回来。
-            if not self._main_visible():
+            if getattr(self, "var_float", None) is not None:
                 try:
-                    self.root.deiconify()
-                    self.root.lift()
+                    self.var_float.set(False)
                 except Exception:
                     pass
-            self.flash("悬浮字幕窗已关闭")
+            # 关闭悬浮条后必须保证还留着一个可见窗口，并清除托盘/遮罩标记。
+            if not self._main_visible():
+                self.restore_main()
+            if not silent:
+                self.flash("悬浮字幕窗已关闭")
 
     def toggle_float(self):
-        self.set_float(not self.float_on)
-        self.var_float.set(self.float_on)
+        self.set_float(not self._float_visible())
+        if getattr(self, "var_float", None) is not None:
+            self.var_float.set(self.float_on)
 
     def toggle_float_on_min(self):
         self.tcfg.float_on_min = not getattr(self.tcfg, "float_on_min", False)
@@ -1317,21 +1375,14 @@ class App:
             self.tcfg.save()
         except Exception:
             pass
-        self.var_fmin.set(self.tcfg.float_on_min)
+        if getattr(self, "var_fmin", None) is not None:
+            self.var_fmin.set(self.tcfg.float_on_min)
         self.flash("最小化时自动切到悬浮窗" if self.tcfg.float_on_min
                    else "已取消最小化切换")
 
     def hide_float(self):
         """回到主界面：收起悬浮窗，恢复主窗口。"""
-        self._tray_hidden = False
-        self._was_iconic = False
-        if self.float_bar is not None:
-            self.float_bar.win.withdraw()
-        self.root.deiconify()
-        self.root.lift()
-        veil = getattr(self, "_veil", None)
-        if veil is not None and veil.veiled:
-            veil.reveal_soon()
+        self.restore_main()
 
     def _reconcile_window(self):
         """把 Tk 的内部状态与真实窗口状态对齐。
@@ -1364,8 +1415,7 @@ class App:
                 self._tray_hidden = False
                 if self.root.state() != "normal":
                     self.root.deiconify()
-                if self.float_bar is not None and self.float_on:
-                    self.float_bar.win.withdraw()
+                self._withdraw_float()
                 return
             if self.root.state() != "normal":
                 self.root.deiconify()
@@ -1413,7 +1463,10 @@ class App:
 
     def float_sync(self, force=False):
         """把最新一条字幕推给悬浮窗（指纹不变则跳过）。"""
-        if getattr(self, "float_bar", None) is None or not self.float_on:
+        bar = getattr(self, "float_bar", None)
+        if bar is None or not self.float_on:
+            return
+        if isinstance(getattr(bar, "win", None), tk.Misc) and not self._float_visible() and not force:
             return
         rec = None
         for i in reversed(self.view_indices):

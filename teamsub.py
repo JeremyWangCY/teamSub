@@ -85,7 +85,7 @@ RESOURCE_DIR = _resource_dir()  # 只读资源（随 exe 打包）
 # 常量放在模块顶层（而不是 pyproject/打包元数据里），是为了让源码运行、
 # 冻结成 exe 两种方式读到的都是同一个值。
 APP_DISPLAY_NAME = "TeamSub"
-APP_VERSION = "0.2.10"
+APP_VERSION = "0.2.11"
 
 CAPTION_DIR = Path(os.environ.get("TEAMSUB_DATA_DIR", APP_DIR)) / "captions"
 
@@ -310,24 +310,28 @@ def _strip_ui_banner(nodes):
         return nodes
     out = []
     i, n = 0, len(nodes)
+
+    def _txt(item):
+        return (item[0] if isinstance(item, tuple) else item).strip()
+
     while i < n:
-        t = nodes[i].strip()
+        t = _txt(nodes[i])
         tl = t.lower()
         if t in ("字幕将以", "实时字幕将以"):
-            if i + 2 < n and nodes[i + 2].strip() in ("显示。", "显示", "."):
+            if i + 2 < n and _txt(nodes[i + 2]) in ("显示。", "显示", "."):
                 i += 3
                 continue
-            if i + 1 < n and nodes[i + 1].strip().endswith(("显示。", "显示")):
+            if i + 1 < n and _txt(nodes[i + 1]).endswith(("显示。", "显示")):
                 i += 2
                 continue
             i += 1
             continue
         if (t.startswith(("字幕将以", "实时字幕将以"))
-                and i + 1 < n and nodes[i + 1].strip() in ("显示。", "显示", ".")):
+                and i + 1 < n and _txt(nodes[i + 1]) in ("显示。", "显示", ".")):
             i += 2
             continue
         if tl in ("captions will be shown in", "live captions will be shown in"):
-            if i + 2 < n and nodes[i + 2].strip() == ".":
+            if i + 2 < n and _txt(nodes[i + 2]) == ".":
                 i += 3
                 continue
             i += 1
@@ -335,6 +339,36 @@ def _strip_ui_banner(nodes):
         out.append(nodes[i])
         i += 1
     return out
+
+
+_SPEAKER_ROLE_HINTS = ("speaker", "author", "displayname", "display-name", "sender")
+_TEXT_ROLE_HINTS = ("caption-text", "closed-caption-text", "caption_text",
+                    "utterance", "transcript-text", "message-body")
+_ROSTER_LIST_NAMES = ("参与者", "人员", "与会者", "Participants", "People")
+_ROSTER_STATUS_RE = re.compile(
+    r"(?:\s*[,，]\s*(?:已静音|取消静音|正在说话|组织者|演示者|与会者|外部|来宾|"
+    r"muted|unmuted|speaking|organizer|presenter|attendee|external|guest).*)$",
+    re.I,
+)
+
+
+def _node_role(node):
+    """读取 UIA 节点的语义提示（含父容器），区分说话人与字幕正文。"""
+    try:
+        role = f"{node.AutomationId or ''} {node.ClassName or ''}".lower()
+    except Exception:
+        return None
+    if any(h in role for h in _SPEAKER_ROLE_HINTS):
+        return "speaker"
+    if any(h in role for h in _TEXT_ROLE_HINTS):
+        return "text"
+    return None
+
+
+def _can_be_structural_speaker(text: str) -> bool:
+    """结构化条目首节点充当说话人时的宽松护栏（不依赖姓名格式正则）。"""
+    s = (text or "").strip()
+    return bool(s) and len(s) <= 80 and not re.search(r"[.?!。？！]$", s)
 
 # 外部嘉宾常见「姓名 - 公司」：Leonardo Rossi - Torino Design。
 # 姓名 2～5 个词、公司 1～6 个词，两边每个词都要首字母大写，句子几乎不会长这样。
@@ -574,6 +608,7 @@ class CaptionReader(threading.Thread):
         self.meeting_title = ""
         self.empty_streak = 0
         self._feishu_full = True  # 飞书：下一轮读全量（换容器后要重新拿历史）
+        self._roster_ts = 0.0     # 上次从 Teams 参与者面板同步姓名的时刻
         self.first_pass = True   # 首次拉到的是会议历史字幕，真实时间不可知
         self.status = "init"
 
@@ -595,39 +630,147 @@ class CaptionReader(threading.Thread):
         return False
 
     # -- 单次读取 -------------------------------------------------------
-    def read_nodes(self):
-        nodes = []
-
-        def walk(node, depth):
-            if depth > 12:
-                return
-            try:
-                kids = node.GetChildren()
-            except Exception:
-                return
-            for ch in kids:
-                try:
-                    ct = ch.ControlTypeName
-                    if ct == "TextControl":
-                        nm = clean(ch.Name)
-                        if nm and not UI_NOISE.match(nm):
-                            # 优先利用客户端暴露的说话人语义，不依赖姓名格式。
+    def sync_meeting_participants(self):
+        """从 Teams 会议窗口的参与者列表学习参会人姓名（严格限时，不影响轮询速度）。"""
+        win = getattr(self, "window", None)
+        if win is None or self.mode != "teams":
+            return
+        now = time.monotonic()
+        if now - getattr(self, "_roster_ts", 0.0) < 30.0:
+            return
+        self._roster_ts = now
+        try:
+            for lname in _ROSTER_LIST_NAMES:
+                for finder in (win.TreeControl, win.ListControl):
+                    try:
+                        ctrl = finder(Name=lname, searchDepth=18)
+                        if not ctrl.Exists(0.05):
+                            continue
+                        kids = ctrl.GetChildren()[:80]
+                        for ch in kids:
                             try:
-                                role = f"{ch.AutomationId} {ch.ClassName}".lower()
-                                if any(h in role for h in ('speaker', 'author', 'displayname', 'display-name')):
+                                ct = ch.ControlTypeName
+                                if ct not in ("ListItemControl", "TreeItemControl", "GroupControl"):
+                                    continue
+                                raw = clean(ch.Name)
+                                if not raw or UI_NOISE.match(raw):
+                                    continue
+                                nm = _ROSTER_STATUS_RE.sub("", raw).strip()
+                                if nm and _can_be_structural_speaker(nm):
                                     self.known_raw.add(nm)
                                     self.known_norm.add(simplify_name(nm))
                             except Exception:
-                                pass
-                            nodes.append(nm)
+                                continue
+                        return
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
+    def read_nodes(self):
+        """按 Teams UIA 树结构读取字幕节点，返回 [(text, role_hint), ...]。
+
+        优先直接利用 Teams 自身的结构信息确定发言人，而不依赖姓名格式正则：
+        1. 节点及祖先容器的 AutomationId/ClassName（author/speaker vs caption-text）；
+        2. 独立条目容器（ListItemControl / DataItemControl）内首个文本为发言人、后续为正文；
+        3. 头像 ImageControl 紧邻的首个文本/子容器首文本为发言人；
+        4. 同级重复字幕条目容器（每条含 [发言人, 正文]）按位置直接标定角色。
+        """
+
+        def _mark_item(entries):
+            cleaned = _strip_ui_banner(entries)
+            if (len(cleaned) >= 2
+                    and not any(r == "speaker" for _, r in cleaned)
+                    and _can_be_structural_speaker(cleaned[0][0])):
+                cleaned[0] = (cleaned[0][0], "speaker")
+                for idx in range(1, len(cleaned)):
+                    if cleaned[idx][1] is None:
+                        cleaned[idx] = (cleaned[idx][0], "text")
+            return cleaned
+
+        def walk(node, depth, inherited_role=None):
+            if depth > 12:
+                return []
+            cur_role = _node_role(node) or inherited_role
+            try:
+                kids = node.GetChildren()
+            except Exception:
+                return []
+            out = []
+            child_groups = []
+            saw_avatar = False
+            for ch in kids:
+                try:
+                    ct = ch.ControlTypeName
+                    if ct == "ImageControl":
+                        saw_avatar = True
+                        av_name = clean(ch.Name)
+                        if (av_name and not UI_NOISE.match(av_name)
+                                and av_name.lower() not in ("avatar", "profile picture", "头像")
+                                and _can_be_structural_speaker(av_name)):
+                            self.known_raw.add(av_name)
+                            self.known_norm.add(simplify_name(av_name))
+                    elif ct == "TextControl":
+                        nm = clean(ch.Name)
+                        if nm and not UI_NOISE.match(nm):
+                            role = _node_role(ch) or cur_role
+                            if role is None and saw_avatar and _can_be_structural_speaker(nm):
+                                role = "speaker"
+                                saw_avatar = False
+                            if role == "speaker":
+                                self.known_raw.add(nm)
+                                self.known_norm.add(simplify_name(nm))
+                            out.append((nm, role))
+                    elif ct in ("ListItemControl", "DataItemControl"):
+                        sub = _mark_item(walk(ch, depth + 1, cur_role))
+                        for t, r in sub:
+                            if r == "speaker":
+                                self.known_raw.add(t)
+                                self.known_norm.add(simplify_name(t))
+                        out.extend(sub)
+                        saw_avatar = False
                     elif ct in ("GroupControl", "CustomControl", "PaneControl",
-                                "ListControl", "ListItemControl"):
-                        walk(ch, depth + 1)
+                                "ListControl"):
+                        sub = walk(ch, depth + 1, cur_role)
+                        if not sub:
+                            continue
+                        if saw_avatar:
+                            sub = _mark_item(sub)
+                            if (len(sub) == 1 and sub[0][1] is None
+                                    and _can_be_structural_speaker(sub[0][0])):
+                                sub[0] = (sub[0][0], "speaker")
+                            for t, r in sub:
+                                if r == "speaker":
+                                    self.known_raw.add(t)
+                                    self.known_norm.add(simplify_name(t))
+                            saw_avatar = False
+                            out.extend(sub)
+                        else:
+                            child_groups.append(sub)
                 except Exception:
                     continue
 
-        walk(self.group, 0)
-        return _strip_ui_banner(nodes)
+            # 同级重复字幕条目容器（如 Teams 用多个 <div>/GroupControl 承载每条字幕）：
+            # 若多个兄弟容器均含 >=2 条未标记文本，且首条均可作说话人、次条含正文特征，则直接按结构标定。
+            if len(child_groups) >= 2:
+                cleaned_groups = [_strip_ui_banner(g) for g in child_groups]
+                non_empty = [g for g in cleaned_groups if g]
+                if (len(non_empty) >= 2
+                        and all(len(g) >= 2 and all(r is None for _, r in g)
+                                and _can_be_structural_speaker(g[0][0]) for g in non_empty)
+                        and any(re.search(r"[.?!。？！,，]", g[1][0]) or len(g[1][0].split()) >= 2
+                                for g in non_empty)):
+                    child_groups = [_mark_item(g) for g in cleaned_groups]
+                    for g in child_groups:
+                        for t, r in g:
+                            if r == "speaker":
+                                self.known_raw.add(t)
+                                self.known_norm.add(simplify_name(t))
+            for g in child_groups:
+                out.extend(g)
+            return out
+
+        return _strip_ui_banner(walk(self.group, 0))
 
     def is_name(self, t: str) -> bool:
         if t in self.known_raw or simplify_name(t) in self.known_norm:
@@ -756,25 +899,35 @@ class CaptionReader(threading.Thread):
         return name, text
 
     def to_pairs(self, nodes):
-        nodes = _strip_ui_banner(nodes)
+        raw_items = _strip_ui_banner(nodes)
+        items = [x if isinstance(x, tuple) else (x, None) for x in raw_items]
         pairs = []
         cur = None
-        # 无结构元数据的旧客户端：支持整体交替序列，也支持局部「姓名 + 字幕」对识别，
-        # 避免顶部提示条或某人连说两行导致整窗姓名识别失效。
-        alternating = (len(nodes) >= 2 and len(nodes) % 2 == 0
-                       and all(self._looks_like_name(nodes[i]) for i in range(0, len(nodes), 2))
-                       and any(not self._looks_like_name(nodes[i]) for i in range(1, len(nodes), 2)))
+        # 无结构元数据的扁平退化路径：支持整体交替序列与局部「姓名 + 字幕」对识别。
+        plain = [t for t, _ in items]
+        all_untyped = all(r is None for _, r in items)
+        alternating = (all_untyped and len(plain) >= 2 and len(plain) % 2 == 0
+                       and all(self._looks_like_name(plain[i]) for i in range(0, len(plain), 2))
+                       and any(not self._looks_like_name(plain[i]) for i in range(1, len(plain), 2)))
         open_texts = {old_text for _, _, old_text in self.open_pairs}
         prev_was_name = False
-        for i, t in enumerate(nodes):
-            is_local_pair_name = (
-                not prev_was_name
-                and t not in open_texts
-                and self._looks_like_name(t)
-                and i + 1 < len(nodes)
-                and not self.is_name(nodes[i + 1])
-            )
-            if self.is_name(t) or (alternating and i % 2 == 0) or is_local_pair_name:
+        for i, (t, role) in enumerate(items):
+            if role == "speaker":
+                is_spk = True
+            elif role == "text":
+                is_spk = False
+            else:
+                next_t, next_r = items[i + 1] if i + 1 < len(items) else ("", None)
+                is_local_pair_name = (
+                    not prev_was_name
+                    and t not in open_texts
+                    and self._looks_like_name(t)
+                    and i + 1 < len(items)
+                    and next_r != "speaker"
+                    and not self.is_name(next_t)
+                )
+                is_spk = self.is_name(t) or (alternating and i % 2 == 0) or is_local_pair_name
+            if is_spk:
                 cur = t
                 self.last_name = t
                 self.known_raw.add(t)
@@ -994,6 +1147,7 @@ class CaptionReader(threading.Thread):
                     self._emit(("status", "idle", ""))
                 else:
                     self.empty_streak = 0
+                    self.sync_meeting_participants()
                     for ev in self.merge(self.to_pairs(nodes)):
                         self._emit(ev)
                     self._emit(("status", "ok", ""))

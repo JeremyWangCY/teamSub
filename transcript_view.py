@@ -18,6 +18,7 @@ def configure_tags(txt, *, reading_size=12, density="comfort", accent=None):
     """统一配置正文字号、行距、颜色与译文缩进。"""
     spacing = 12 if density == "comfort" else 4
     txt.tag_configure("time", foreground=UK.C.T3, font=UK.F_TIME)
+    txt.tag_configure("spname", foreground=UK.C.TEXT, font=UK.F_NAME)
     txt.tag_configure("body", foreground=UK.C.TEXT,
                       font=(UK.FAMILY, reading_size),
                       lmargin1=0, lmargin2=0, spacing3=4)
@@ -51,13 +52,12 @@ def render_block(txt, i, rec, ctx, display_mode="both", at=None, retry=True):
     txt.mark_gravity(f"rec{i}", "left")
     name = ctx.name_of(rec)
     color = ctx.speaker_color(rec["name"])
-    tag = f"sp{i % 40}"
-    txt.tag_configure(tag, foreground=UK.C.TEXT, font=UK.F_NAME)
-    dot = f"dot{i % 40}"
-    txt.tag_configure(dot, foreground=color)
+    dot = f"dot_{color.lstrip('#').lower()}"
+    if dot not in txt.tag_names():
+        txt.tag_configure(dot, foreground=color)
 
     parts = [("●  ", dot), (f"{ctx.ts_of(rec)}  ", "time"),
-             (f"{name}\n", (tag,)),
+             (f"{name}\n", ("spname",)),
              (f"{rec.get('text', '')}\n", "body")]
     if display_mode == "translation":
         parts = parts[:-1]

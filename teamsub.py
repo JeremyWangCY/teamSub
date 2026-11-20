@@ -1754,18 +1754,22 @@ class App:
             return
         if isinstance(getattr(bar, "win", None), tk.Misc) and not self._float_visible() and not force:
             return
-        rec = None
+        rec, rec_idx = None, None
         for i in reversed(self.view_indices):
             r = self.records[i]
             if (r.get("text") or "").strip():
-                rec = r
+                rec, rec_idx = r, i
                 break
         if rec is None:
-            rec = next((r for r in reversed(self.records) if (r.get("text") or "").strip()), None)
+            for k in range(len(self.records) - 1, -1, -1):
+                r = self.records[k]
+                if (r.get("text") or "").strip():
+                    rec, rec_idx = r, k
+                    break
         history = []
         keep = floatbar.KEEP - 1            # 悬浮窗滚动保留最近这些条，旧句不清空
         if rec is not None and keep:
-            idx = next((k for k, r in enumerate(self.records) if r is rec), None)
+            idx = rec_idx
             while idx is not None and idx > 0 and len(history) < keep:
                 idx -= 1
                 prev = self.records[idx]
@@ -2077,7 +2081,8 @@ class App:
     # 兼容旧调用
     def draw_translation(self, i, rec):
         self.update_block(i, rec)
-        self.float_sync()
+        if not getattr(self, "_batching", False):
+            self.float_sync()
 
     def append_record(self, i, rec):
         if getattr(self, '_rendering', False):
@@ -2161,8 +2166,9 @@ class App:
                     self.autosave(rec)
                     dirty_sidebar = True
                 elif kind == "update":
-                    idx = next((k for k, r in enumerate(self.records)
-                                if r is a or (a.get('id') and r.get('id') == a['id'])), None)
+                    aid = a.get('id')
+                    idx = next((k for k in range(len(self.records) - 1, -1, -1)
+                                if self.records[k] is a or (aid and self.records[k].get('id') == aid)), None)
                     if idx is not None:
                         rec = self.records[idx]
                         old_text = rec.get('text')
@@ -2189,7 +2195,8 @@ class App:
                     if request is None:
                         continue
                     rec, source = request
-                    rid = next((i for i, r in enumerate(self.records) if r is rec), None)
+                    rid = next((i for i in range(len(self.records) - 1, -1, -1)
+                                if self.records[i] is rec), None)
                     if (rid is not None and rec.get('_tr_request') == token
                             and rec['text'] == source):
                         rec.pop('_tr_request', None)

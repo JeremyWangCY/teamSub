@@ -15,7 +15,7 @@ import uuid
 # 投影节流：SQLite 才是事实源，Markdown 只是给人看的快照，没必要每条都重写。
 # 收尾时的"最后一次投影"也走同一个判据——没有未投影的记录就跳过，省掉一整轮
 # fsync + replace；有未投影的记录则照写不误，否则用户打开 .md 会永久少几条。
-_PROJECT_INTERVAL = 1.0
+_PROJECT_INTERVAL = 4.0
 
 
 class CaptionStore:

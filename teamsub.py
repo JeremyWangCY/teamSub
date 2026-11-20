@@ -85,7 +85,7 @@ RESOURCE_DIR = _resource_dir()  # 只读资源（随 exe 打包）
 # 常量放在模块顶层（而不是 pyproject/打包元数据里），是为了让源码运行、
 # 冻结成 exe 两种方式读到的都是同一个值。
 APP_DISPLAY_NAME = "TeamSub"
-APP_VERSION = "0.2.9"
+APP_VERSION = "0.2.10"
 
 CAPTION_DIR = Path(os.environ.get("TEAMSUB_DATA_DIR", APP_DIR)) / "captions"
 
@@ -270,9 +270,12 @@ UI_NOISE = re.compile(
 NAME_HINT = re.compile(
     r"(\([A-ZĐ0-9][A-ZĐ0-9\-]{2,}\)\s*$)"
     r"|(\s_\s*\[)"
-    r"|(^[^\W\d_][\w]*(?:_[\w]+)+(?:-[\w]+)?$)"
+    r"|(^[^\W\d_][\w'.-]*(?:\s+[^\W\d_][\w'.-]*)*_[\w'.-]+(?:\s+[\w'.-]+)*$)"
     r"|(^[a-z]{2,15}(?:\s+[a-z]{1,15}){1,3}-[a-z0-9]{1,8}$)"
 )
+# 双义词（既是英文冠词/代词/助动词，又是常见华人姓氏拼音如 An 安、He 何、Yu 余、Su 苏）：
+# 仅在单字或后接常见英文词/小写词时排除，若后接首字母大写的姓名词（如 "AN Chao"、"He Wei"）则放行。
+_AMBIGUOUS_SURNAMES = {"an", "he", "may", "will", "young", "long", "wan", "mo", "bai", "yu", "su"}
 # 常见口语词/句首词：绝不当作未登记的新发言人姓名。
 _NON_NAME_HEADS = {
     "a", "an", "the", "i", "you", "we", "they", "he", "she", "it",
@@ -806,7 +809,11 @@ class CaptionReader(threading.Thread):
             return False
         first_clean = words[0].lower().strip("-'_")
         if first_clean in _NON_NAME_HEADS:
-            return False
+            if not (first_clean in _AMBIGUOUS_SURNAMES
+                    and len(words) >= 2
+                    and all(w[0].isupper() for w in words[1:])
+                    and all(w.lower().strip("-'_") not in _NON_NAME_HEADS for w in words[1:])):
+                return False
         if not all(w.replace('-', '').replace("'", '').replace('_', '').isalpha() for w in words):
             return False
         # 全小写拼音/企业账号（如 "zhang jian-sh"、"zouyumin"）：Teams ASR 的英文正文首字母恒大写，
@@ -888,15 +895,25 @@ class CaptionReader(threading.Thread):
                             available.remove(i)
                             break
         now_dt, now_ts = datetime.now(), time.time()
+        emitted_recs = set()
         for i, (name, raw, text) in enumerate(cur):
             rec = aligned[i]
             if rec is not None:
                 full = CM.concat_caption(prefixes[i], text) if prefixes[i] else text
+                nxt = next((k for k in range(i + 1, len(cur)) if aligned[k] is rec), None)
+                if nxt is not None:
+                    # 同一条记录跨多个窗口槽位时，前序槽位只负责向下传递最新前缀，
+                    # 不能用局部前缀覆写整条记录（否则每轮轮询都会在半句与整句间反复触发假 update）。
+                    if not CM.looks_like_revision(full, cur[nxt][2]):
+                        prefixes[nxt] = full
+                    continue
                 if rec['text'] != full:
                     rec.update(text=full, raw=raw or rec['raw'], backlog=False)
                     rec['revision'] = rec.get('revision', 0) + 1
                     rec['_seen'] = now_ts
-                    events.append(('update', rec))
+                    if id(rec) not in emitted_recs:
+                        emitted_recs.add(id(rec))
+                        events.append(('update', rec))
                 continue
             host = self._fold_target(name, text, now_ts)
             if host is not None:
@@ -909,13 +926,16 @@ class CaptionReader(threading.Thread):
                 host['revision'] = host.get('revision', 0) + 1
                 host['_seen'] = now_ts
                 aligned[i], prefixes[i] = host, ("" if is_rev else base)
-                events.append(('update', host))
+                if id(host) not in emitted_recs:
+                    emitted_recs.add(id(host))
+                    events.append(('update', host))
                 continue
             rec = {"name": name, "raw": raw, "text": text, "ts": now_dt,
                    "backlog": self.first_pass, "id": uuid.uuid4().hex, "revision": 0,
                    "_seen": now_ts}
             aligned[i], prefixes[i] = rec, ""
             self.records.append(rec)
+            emitted_recs.add(id(rec))
             events.append(("new", rec))
         self.open_pairs, self.open_records = list(cur), aligned
         self.open_prefix = prefixes
@@ -1991,7 +2011,11 @@ class App:
                                 if r is a or (a.get('id') and r.get('id') == a['id'])), None)
                     if idx is not None:
                         rec = self.records[idx]
+                        old_text = rec.get('text')
+                        old_name = rec.get('name')
                         rec.update(a)
+                        if rec.get('text') == old_text and rec.get('name') == old_name:
+                            continue
                         # 旧译文先留着（淡色）直到新译文到；尚无旧译文但翻译开启时保持 pending，
                         # 避免每次 ASR 改写都在「有 翻译中… / 无 翻译中…」之间来回跳动闪烁。
                         stale = rec.get('tr') or rec.get('_tr_stale')
@@ -2034,9 +2058,11 @@ class App:
                         elif st == "skip":
                             rec["tr_status"] = "skip"
                             rec["tr"] = ""
+                            self.autosave_tr(rec)
                         else:
                             rec["tr_status"] = "fail"
                             rec["tr_err"] = meta.get("error", "")
+                            self.autosave_tr(rec)
                         if not self.speaker_filter or rec["name"] == self.speaker_filter:
                             self.draw_translation(rid, rec)
                 elif kind == "meeting":

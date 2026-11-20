@@ -130,8 +130,15 @@ class ReaderMergeTests(unittest.TestCase):
         reader = self.make()
         self.live(reader, ("Alex", "前半句，"))
         reader.merge(self.frame(("Alex", "前半句，"), ("Alex", "后")))
-        reader.merge(self.frame(("Alex", "前半句，"), ("Alex", "后半句。")))
+        events = reader.merge(self.frame(("Alex", "前半句，"), ("Alex", "后半句。")))
         self.assertEqual(len(reader.records), 1)
+        self.assertEqual(reader.records[0]["text"], "前半句，后半句。")
+        self.assertEqual(len(events), 1)
+        # 画面未发生变化时，后续轮询绝不能在「前半句，」与「前半句，后半句。」之间反复发出假 update
+        rev_before = reader.records[0]["revision"]
+        idle_events = reader.merge(self.frame(("Alex", "前半句，"), ("Alex", "后半句。")))
+        self.assertEqual(idle_events, [])
+        self.assertEqual(reader.records[0]["revision"], rev_before)
         self.assertEqual(reader.records[0]["text"], "前半句，后半句。")
 
     def test_speaker_change_stays_separate(self):
@@ -219,6 +226,8 @@ class SpeakerNameTests(unittest.TestCase):
             "wang_zewei", "Take a minute.",
             "guo_jiaxing", "No problem.",
             "zouyumin", "What was that?",
+            "AN Chao_LD Interior", "I can speak English.",
+            "AN Chao", "Very soon.",
         ]
         pairs = reader.to_pairs(nodes)
         self.assertEqual(
@@ -230,6 +239,8 @@ class SpeakerNameTests(unittest.TestCase):
                 ("wang_zewei", "Take a minute."),
                 ("guo_jiaxing", "No problem."),
                 ("zouyumin", "What was that?"),
+                ("AN Chao_LD Interior", "I can speak English."),
+                ("AN Chao", "Very soon."),
             ],
         )
 

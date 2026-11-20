@@ -208,3 +208,59 @@ class SpeakerNameTests(unittest.TestCase):
     def test_sentence_with_dash_is_not_name(self):
         for text in ("So we move it - Torino", "OK - fine", "Yes - Right"):
             self.assertFalse(T.is_org_name(text), text)
+
+    def test_teams_banner_and_enterprise_speaker_names(self):
+        reader = T.CaptionReader(queue.Queue())
+        nodes = [
+            "字幕将以", "英语(美国)", "显示。",
+            "Jeremy Wang", "Hi, Jenny.",
+            "Jeni Mathan (VF-KPTX-VTKMĐPTX)", "Hello.",
+            "zhang jian-sh", "Hello Jenny.",
+            "wang_zewei", "Take a minute.",
+            "guo_jiaxing", "No problem.",
+            "zouyumin", "What was that?",
+        ]
+        pairs = reader.to_pairs(nodes)
+        self.assertEqual(
+            [(p[0], p[2]) for p in pairs],
+            [
+                ("Jeremy Wang", "Hi, Jenny."),
+                ("Jeni Mathan", "Hello."),
+                ("zhang jian-sh", "Hello Jenny."),
+                ("wang_zewei", "Take a minute."),
+                ("guo_jiaxing", "No problem."),
+                ("zouyumin", "What was that?"),
+            ],
+        )
+
+    def test_top_orphan_caption_keeps_original_speaker_when_header_scrolls_out(self):
+        reader = T.CaptionReader(queue.Queue())
+        frame1 = reader.to_pairs(["Jeremy Wang", "Fancy magazines.", "Jeni Mathan (VF-KPTX-VTKMĐPTX)", "Yes, yes."])
+        reader.merge(frame1)
+        # 下一帧顶部 Jeremy Wang 的姓名节点已滚出视口，但底部最新发言人是 Jeni Mathan：
+        # 顶部的 "Fancy magazines." 必须继续归属 Jeremy Wang，不能因变成 Jeni Mathan 而重复入库。
+        frame2 = reader.to_pairs(["Fancy magazines.", "Jeni Mathan (VF-KPTX-VTKMĐPTX)", "Yes, yes."])
+        events = reader.merge(frame2)
+        self.assertEqual(len(reader.records), 2)
+        self.assertEqual(reader.records[0]["name"], "Jeremy Wang")
+        self.assertEqual(events, [])
+
+    def test_english_folded_revision_preserves_space_and_restatement_replaces(self):
+        reader = T.CaptionReader(queue.Queue(), merge_gap_ms=1500)
+        ReaderMergeTests.live(reader, ("Jeremy Wang", "We need to"))
+        reader.merge([("Jeremy Wang", "Jeremy Wang", "We need to"),
+                      ("Jeremy Wang", "Jeremy Wang", "check")])
+        reader.merge([("Jeremy Wang", "Jeremy Wang", "We need to"),
+                      ("Jeremy Wang", "Jeremy Wang", "check the tracker.")])
+        self.assertEqual(len(reader.records), 1)
+        self.assertEqual(reader.records[0]["text"], "We need to check the tracker.")
+
+        reader2 = T.CaptionReader(queue.Queue(), merge_gap_ms=1500)
+        ReaderMergeTests.live(reader2, ("Rajesh", "Now it is five"))
+        reader2.merge([("Rajesh", "Rajesh", "Now it is five"),
+                       ("Rajesh", "Rajesh", "Now it is 520")])
+        reader2.merge([("Rajesh", "Rajesh", "Now it is five"),
+                       ("Rajesh", "Rajesh", "Now it is 520, almost three hours.")])
+        self.assertEqual(len(reader2.records), 1)
+        self.assertEqual(reader2.records[0]["text"], "Now it is 520, almost three hours.")
+

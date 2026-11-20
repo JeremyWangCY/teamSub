@@ -428,4 +428,30 @@ class FloatBarLifecycleTests(ShellTestCase):
         self.assertEqual(app.float_bar.win.winfo_x(), 123)
         self.assertEqual(app.float_bar.win.winfo_y(), 234)
 
+    def test_translation_pending_stays_steady_on_asr_update_and_backlog_shows_timestamp(self):
+        """翻译开启时，ASR 连续改写不会让『翻译中…』反复消失又出现；带采集时间的首帧记录不再显示时间未知。"""
+        from datetime import datetime
+        import meeting_export as ME
+        self.start()
+        app = self.app
+        app.trans_on = True
+        app.pump_translation = lambda: None
+        ts = datetime(2026, 11, 19, 14, 50, 2)
+        rec = {'name': 'Jeremy Wang', 'raw': 'Jeremy Wang', 'text': 'We need',
+               'ts': ts, 'backlog': True, 'id': 'r-live-1', 'revision': 0}
+        app.q.put(('new', dict(rec)))
+        self.pump()
+        self.assertEqual(app.records[0].get('tr_status'), 'pending')
+        self.assertIn('翻译中…', app.txt.get('1.0', 'end'))
+        self.assertEqual(app.ts_of(app.records[0]), '14:50:02')
+        self.assertIn('[14:50:02]', ME.format_meeting('测试', app.records))
+
+        # 模拟 ASR 连续改写同一句：翻译中… 必须稳定保持，不能被 _invalidate_translation 清掉
+        updated = dict(rec, text='We need to check the tracker.', revision=1, backlog=False)
+        app.q.put(('update', updated))
+        self.pump()
+        self.assertEqual(app.records[0].get('tr_status'), 'pending')
+        self.assertIn('翻译中…', app.txt.get('1.0', 'end'))
+
+
 

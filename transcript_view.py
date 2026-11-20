@@ -26,7 +26,8 @@ def configure_tags(txt, *, reading_size=12, density="comfort", accent=None):
                       lmargin1=14, lmargin2=14, spacing3=spacing)
     # 字幕改写后、新译文到达前沿用旧译文：同字号只换浅色，行高不变
     txt.tag_configure("trstale", foreground=UK.C.T3)
-    txt.tag_configure("trpending", foreground=UK.C.T3, font=UK.F_MINI,
+    txt.tag_configure("trpending", foreground=UK.C.T3,
+                      font=(UK.FAMILY, reading_size),
                       lmargin1=14, lmargin2=14, spacing3=spacing)
     txt.tag_configure("trfail", foreground=UK.C.RED, background=UK.C.RED_S,
                       font=UK.F_MINI,

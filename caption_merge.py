@@ -60,25 +60,46 @@ def looks_like_revision(prev: str, new: str) -> bool:
         return False
     if a == b:
         return True
-    if b.startswith(a) or a.startswith(b):
+    if b.startswith(a):
         return True
-    if has_cjk(a) or has_cjk(b):
-        if len(a) <= 24 and _overlap(a, b) >= 0.70:
-            return True                      # 短句基本被新句包含 → 改写
-        if len(a) >= 8 and _overlap(a, b) >= 0.85:
-            return True                      # 长句整句重排 → 内容几乎一致
-        return SequenceMatcher(None, a, b[:len(a) + 8], autojunk=False).ratio() >= 0.62
-    # 英文：词级前缀（忽略标点差异）
-    ta = re.findall(r"[\w']+", a)
-    tb = re.findall(r"[\w']+", b)
-    if ta and tb:
-        short, long_ = (ta, tb) if len(ta) <= len(tb) else (tb, ta)
-        if long_[:len(short)] == short:
+    # 新句比旧句更短时：只有旧句尚未收句、且新句保留了旧句绝大部分内容才算改写；
+    # 已收句的长句后紧跟短句（或发言人名与句首相同），绝不能因前缀命中而吞并。
+    if a.startswith(b):
+        if not ends_sentence(prev) and len(b) >= max(2, int(len(a) * 0.75)):
             return True
-    if max(len(a), len(b)) >= 40:
-        sa, sb = set(re.findall(r"[\w']+", a)), set(re.findall(r"[\w']+", b))
+    if has_cjk(a) or has_cjk(b):
+        if len(b) >= len(a) and len(a) <= 24 and _overlap(a, b) >= 0.70:
+            return True                      # 短句基本被新句包含 → 改写
+        if len(b) >= int(len(a) * 0.75) and len(a) >= 8 and _overlap(a, b) >= 0.85:
+            return True                      # 长句整句重排 → 内容几乎一致
+        if len(b) >= int(len(a) * 0.75):
+            return SequenceMatcher(None, a, b[:len(a) + 8], autojunk=False).ratio() >= 0.62
+        return False
+    # 英文：词级前缀（忽略标点差异，须按原始文本分词而非去空格后的 a/b）
+    lp, ln = (prev or "").lower(), (new or "").lower()
+    ta = re.findall(r"[\w']+", lp)
+    tb = re.findall(r"[\w']+", ln)
+    if ta and tb:
+        if len(tb) >= len(ta) and tb[:len(ta)] == ta:
+            return True
+        if not ends_sentence(prev) and len(tb) >= len(ta):
+            # ASR 常在补全整句时改写末尾 1 个未定词（如 "Now it is five" → "Now it is 520..."）
+            if len(ta) >= 3 and tb[:len(ta) - 1] == ta[:len(ta) - 1]:
+                return True
+            if len(ta) == 2 and ta[0] == tb[0] and len(ta[0]) >= 3:
+                return True
+            if (len(ta) >= 4 and ta[:2] == tb[:2]
+                    and len(set(ta) & set(tb)) >= max(3, int(len(set(ta)) * 0.6))):
+                return True
+        if (len(ta) > len(tb) and not ends_sentence(prev)
+                and len(tb) >= max(2, int(len(ta) * 0.75)) and ta[:len(tb)] == tb):
+            return True
+    if max(len(a), len(b)) >= 40 and len(b) >= int(len(a) * 0.7):
+        sa, sb = set(ta), set(tb)
         if sa and sb and len(sa & sb) / len(sa | sb) >= 0.60:
             return True
+    if len(b) < int(len(a) * 0.65) and ends_sentence(prev):
+        return False
     return SequenceMatcher(None, a, b, autojunk=False).ratio() >= 0.72
 
 
@@ -88,6 +109,22 @@ def _tail_head_overlap(prev: str, new: str, limit: int = 8) -> int:
         if prev[-k:] == new[:k]:
             return k
     return 0
+
+
+def concat_caption(prev: str, new: str) -> str:
+    """已知 new 是 prev 的续写时直接拼接（只处理重叠去重与中英空格，不做改写替换）。"""
+    p = (prev or "").strip()
+    n = (new or "").strip()
+    if not p:
+        return n
+    if not n:
+        return p
+    cut = _tail_head_overlap(p, n)
+    if cut:
+        return p + n[cut:]
+    if p[-1] in _SOFT_TAIL or (has_cjk(p[-1]) and has_cjk(n[0])):
+        return p + n
+    return p + " " + n
 
 
 def join_caption(prev: str, new: str) -> str:
@@ -104,12 +141,7 @@ def join_caption(prev: str, new: str) -> str:
         return p
     if looks_like_revision(p, n):
         return n if len(_norm(n)) >= len(_norm(p)) else p
-    cut = _tail_head_overlap(p, n)
-    if cut:
-        return p + n[cut:]
-    if p[-1] in _SOFT_TAIL or (has_cjk(p[-1]) and has_cjk(n[0])):
-        return p + n
-    return p + " " + n
+    return concat_caption(p, n)
 
 
 def should_merge(prev, name: str, text: str, now: float, gap: float,

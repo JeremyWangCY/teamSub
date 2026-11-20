@@ -35,7 +35,13 @@ def missing_translation(records):
 
 def _stamp(r):
     ts = r.get('ts')
-    return ts.strftime('%H:%M:%S') if isinstance(ts, datetime) and not r.get('backlog') else '时间未知'
+    if isinstance(ts, datetime):
+        return ts.strftime('%H:%M:%S')
+    for key in ('display_time', 'legacy_time'):
+        val = (r.get(key) or '').strip()
+        if val and val not in ('--:--:--', '时间未知'):
+            return val
+    return '时间未知'
 
 
 def _lines(r, opt):
@@ -62,7 +68,7 @@ def format_meeting(title, records, opt=ExportOptions()):
         raise ValueError('不支持的导出选项')
     if opt.format == 'srt':
         sources = {r.get('source_session', '') for r in records}
-        known = all(isinstance(r.get('ts'), datetime) and not r.get('backlog') for r in records)
+        known = all(isinstance(r.get('ts'), datetime) for r in records)
         if (not known or len(sources) > 1) and not opt.synthetic_timing:
             raise ValueError('包含未知时间或多个会议片段，请明确选择「阅读时间轴」或使用 Markdown / TXT。')
         base = records[0]['ts'] if records and known else None

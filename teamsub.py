@@ -85,7 +85,7 @@ RESOURCE_DIR = _resource_dir()  # 只读资源（随 exe 打包）
 # 常量放在模块顶层（而不是 pyproject/打包元数据里），是为了让源码运行、
 # 冻结成 exe 两种方式读到的都是同一个值。
 APP_DISPLAY_NAME = "TeamSub"
-APP_VERSION = "0.2.8"
+APP_VERSION = "0.2.9"
 
 CAPTION_DIR = Path(os.environ.get("TEAMSUB_DATA_DIR", APP_DIR)) / "captions"
 
@@ -263,9 +263,76 @@ def install_crash_log(win=None):
 GROUP_NAMES = ["实时字幕", "实时辅助字幕", "Live captions", "字幕"]
 UI_NOISE = re.compile(
     r"^(提供实时辅助字幕反馈|隐藏实时字幕|实时字幕，|字幕设置|显示字幕|"
-    r"打开实时字幕|翻译为|关闭原文|中号字体|展开字幕|收起字幕)"
+    r"打开实时字幕|翻译为|关闭原文|中号字体|展开字幕|收起字幕|"
+    r"(?:实时)?字幕将以.*显示[。.]?$|Captions will be shown in.*\.$|"
+    r"Live captions will be shown in.*\.$)"
 )
-NAME_HINT = re.compile(r"(\([A-ZĐ0-9][A-ZĐ0-9\-]{3,}\)\s*$)|(\s_\s*\[)")
+NAME_HINT = re.compile(
+    r"(\([A-ZĐ0-9][A-ZĐ0-9\-]{2,}\)\s*$)"
+    r"|(\s_\s*\[)"
+    r"|(^[^\W\d_][\w]*(?:_[\w]+)+(?:-[\w]+)?$)"
+    r"|(^[a-z]{2,15}(?:\s+[a-z]{1,15}){1,3}-[a-z0-9]{1,8}$)"
+)
+# 常见口语词/句首词：绝不当作未登记的新发言人姓名。
+_NON_NAME_HEADS = {
+    "a", "an", "the", "i", "you", "we", "they", "he", "she", "it",
+    "this", "that", "these", "those", "there", "here",
+    "is", "are", "was", "were", "be", "been", "am",
+    "do", "does", "did", "done", "have", "has", "had",
+    "can", "could", "will", "would", "shall", "should", "may", "might", "must",
+    "hello", "hi", "hey", "ok", "okay", "yes", "yeah", "yep", "no", "nope",
+    "good", "thank", "thanks", "sorry", "please", "sure", "right", "well",
+    "what", "when", "where", "why", "how", "who", "which",
+    "so", "and", "but", "or", "if", "because", "as", "since", "while",
+    "on", "in", "at", "to", "for", "from", "with", "by", "of", "about",
+    "after", "before", "under", "over", "into", "out", "up", "down",
+    "not", "just", "now", "then", "still", "already", "also", "too", "very",
+    "only", "even", "almost", "maybe", "perhaps", "actually", "exactly",
+    "let", "lets", "come", "go", "see", "look", "take", "make", "get", "give",
+    "put", "keep", "hold", "wait", "open", "close", "start", "restart",
+    "update", "check", "show", "tell", "ask", "say", "said", "think", "know",
+    "want", "need", "like", "try", "use", "work", "pull", "send", "share",
+    "reshare", "play", "sleep", "sit", "turn", "move", "call",
+    "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+    "first", "second", "third", "next", "last", "other", "another", "all", "some",
+    "any", "each", "every", "both", "more", "most", "much", "many", "few",
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+    "today", "tomorrow", "yesterday", "morning", "afternoon", "evening", "tonight",
+}
+
+
+def _strip_ui_banner(nodes):
+    """剥离 Teams 顶部语言提示条（如 ['字幕将以', '英语(美国)', '显示。']）。"""
+    if not nodes:
+        return nodes
+    out = []
+    i, n = 0, len(nodes)
+    while i < n:
+        t = nodes[i].strip()
+        tl = t.lower()
+        if t in ("字幕将以", "实时字幕将以"):
+            if i + 2 < n and nodes[i + 2].strip() in ("显示。", "显示", "."):
+                i += 3
+                continue
+            if i + 1 < n and nodes[i + 1].strip().endswith(("显示。", "显示")):
+                i += 2
+                continue
+            i += 1
+            continue
+        if (t.startswith(("字幕将以", "实时字幕将以"))
+                and i + 1 < n and nodes[i + 1].strip() in ("显示。", "显示", ".")):
+            i += 2
+            continue
+        if tl in ("captions will be shown in", "live captions will be shown in"):
+            if i + 2 < n and nodes[i + 2].strip() == ".":
+                i += 3
+                continue
+            i += 1
+            continue
+        out.append(nodes[i])
+        i += 1
+    return out
+
 # 外部嘉宾常见「姓名 - 公司」：Leonardo Rossi - Torino Design。
 # 姓名 2～5 个词、公司 1～6 个词，两边每个词都要首字母大写，句子几乎不会长这样。
 ORG_NAME = re.compile(r"^(?P<person>[^\W\d_][\w'.]*(?:\s+[^\W\d_][\w'.]*){1,4})"
@@ -557,7 +624,7 @@ class CaptionReader(threading.Thread):
                     continue
 
         walk(self.group, 0)
-        return nodes
+        return _strip_ui_banner(nodes)
 
     def is_name(self, t: str) -> bool:
         if t in self.known_raw or simplify_name(t) in self.known_norm:
@@ -686,29 +753,69 @@ class CaptionReader(threading.Thread):
         return name, text
 
     def to_pairs(self, nodes):
-        pairs, cur = [], self.last_name
-        # 无结构元数据的旧客户端：仅在完整的「姓名/字幕」交替序列中补认普通姓名。
+        nodes = _strip_ui_banner(nodes)
+        pairs = []
+        cur = None
+        # 无结构元数据的旧客户端：支持整体交替序列，也支持局部「姓名 + 字幕」对识别，
+        # 避免顶部提示条或某人连说两行导致整窗姓名识别失效。
         alternating = (len(nodes) >= 2 and len(nodes) % 2 == 0
                        and all(self._looks_like_name(nodes[i]) for i in range(0, len(nodes), 2))
                        and any(not self._looks_like_name(nodes[i]) for i in range(1, len(nodes), 2)))
+        open_texts = {old_text for _, _, old_text in self.open_pairs}
+        prev_was_name = False
         for i, t in enumerate(nodes):
-            if self.is_name(t) or (alternating and i % 2 == 0):
+            is_local_pair_name = (
+                not prev_was_name
+                and t not in open_texts
+                and self._looks_like_name(t)
+                and i + 1 < len(nodes)
+                and not self.is_name(nodes[i + 1])
+            )
+            if self.is_name(t) or (alternating and i % 2 == 0) or is_local_pair_name:
                 cur = t
                 self.last_name = t
                 self.known_raw.add(t)
                 self.known_norm.add(simplify_name(t))
+                prev_was_name = True
             else:
-                pairs.append((simplify_name(cur) if cur else "未知发言人", cur or "", t))
+                prev_was_name = False
+                spk_raw = cur
+                if not spk_raw:
+                    # 视口顶部孤立字幕行（其说话人节点已滚出顶部）：优先从上一帧同文记录
+                    # 继承原说话人，避免盲目套用上一帧最底部的 self.last_name 造成换人重复入库。
+                    for old_norm, old_raw, old_text in self.open_pairs:
+                        if self._same_utterance(old_text, t):
+                            spk_raw = old_raw or old_norm
+                            break
+                    if not spk_raw:
+                        spk_raw = self.open_pairs[0][1] if self.open_pairs else self.last_name
+                pairs.append((simplify_name(spk_raw) if spk_raw else "未知发言人", spk_raw or "", t))
         return pairs
 
     @staticmethod
     def _looks_like_name(text):
-        if is_org_name(text):
+        s = (text or "").strip()
+        if not s or len(s) > 70:
+            return False
+        if is_org_name(s) or NAME_HINT.search(s):
             return True
-        words = text.strip().split()
-        return (0 < len(words) <= 5 and len(text) <= 70
-                and all(w.replace('-', '').replace("'", '').isalpha() for w in words)
-                and all(not w.isascii() or w[0].isupper() for w in words))
+        if re.search(r"[.?!,，。？！;；:：]", s):
+            return False
+        words = s.split()
+        if not (0 < len(words) <= 5):
+            return False
+        first_clean = words[0].lower().strip("-'_")
+        if first_clean in _NON_NAME_HEADS:
+            return False
+        if not all(w.replace('-', '').replace("'", '').replace('_', '').isalpha() for w in words):
+            return False
+        # 全小写拼音/企业账号（如 "zhang jian-sh"、"zouyumin"）：Teams ASR 的英文正文首字母恒大写，
+        # 纯小写无标点短词块仅出现在账号名中。
+        if all(w.isascii() and w.islower() for w in words):
+            if len(words) == 1:
+                return len(words[0]) >= 4 and words[0] not in _NON_NAME_HEADS
+            return len(words) <= 3 and all(w not in _NON_NAME_HEADS for w in words)
+        return all(not w.isascii() or w[0].isupper() for w in words)
 
     # -- 增量对齐 -------------------------------------------------------
     @staticmethod
@@ -784,7 +891,7 @@ class CaptionReader(threading.Thread):
         for i, (name, raw, text) in enumerate(cur):
             rec = aligned[i]
             if rec is not None:
-                full = (prefixes[i] or "") + text
+                full = CM.concat_caption(prefixes[i], text) if prefixes[i] else text
                 if rec['text'] != full:
                     rec.update(text=full, raw=raw or rec['raw'], backlog=False)
                     rec['revision'] = rec.get('revision', 0) + 1
@@ -794,13 +901,14 @@ class CaptionReader(threading.Thread):
             host = self._fold_target(name, text, now_ts)
             if host is not None:
                 # 续写：并进上一条，本槽位记住这段前缀，之后它自己被改写时
-                # 只替换前缀之后的部分，不会把上文丢掉
+                # 只替换前缀之后的部分；若本身就是对上一条的整句改写，则不留旧前缀
                 base = host['text']
+                is_rev = CM.looks_like_revision(base, text)
                 host.update(text=CM.join_caption(base, text), raw=raw or host['raw'],
                             backlog=False)
                 host['revision'] = host.get('revision', 0) + 1
                 host['_seen'] = now_ts
-                aligned[i], prefixes[i] = host, base
+                aligned[i], prefixes[i] = host, ("" if is_rev else base)
                 events.append(('update', host))
                 continue
             rec = {"name": name, "raw": raw, "text": text, "ts": now_dt,
@@ -1651,8 +1759,13 @@ class App:
         return clean(rec.get("raw") or rec["name"])
 
     def ts_of(self, rec):
-        """历史字幕（启动前已产生的）没有可信时间，显示占位。"""
-        return "--:--:--" if rec.get("backlog") or not isinstance(rec.get("ts"), datetime) else rec["ts"].strftime("%H:%M:%S")
+        """优先显示采集时间；仅无时间戳的旧版导入记录显示占位。"""
+        if isinstance(rec.get("ts"), datetime):
+            return rec["ts"].strftime("%H:%M:%S")
+        legacy = (rec.get("legacy_time") or "").strip()
+        if legacy and legacy not in ("--:--:--", "时间未知"):
+            return legacy
+        return "--:--:--"
 
     def _empty_reason(self):
         """空状态的原因：还没有字幕 / 有字幕但被清屏 / 被搜索或发言人筛掉。"""
@@ -1865,31 +1978,33 @@ class App:
                 elif kind == "new":
                     rec = a
                     idx = len(self.records)
+                    if self.trans_on:
+                        rec["tr_status"] = "pending"
+                        self.pending_tr[idx] = time.time()
                     self.records.append(rec)
                     if not self.speaker_filter or rec["name"] == self.speaker_filter:
                         self.append_record(idx, rec)
                     self.autosave(rec)
                     dirty_sidebar = True
-                    if self.trans_on:
-                        self.pending_tr[idx] = time.time()
                 elif kind == "update":
                     idx = next((k for k, r in enumerate(self.records)
                                 if r is a or (a.get('id') and r.get('id') == a['id'])), None)
                     if idx is not None:
                         rec = self.records[idx]
                         rec.update(a)
-                        # 旧译文先留着（淡色）直到新译文到：字幕每改写一次就清空译文，
-                        # 块高度会在「有译文 / 没译文」之间来回跳，整屏跟着抖
+                        # 旧译文先留着（淡色）直到新译文到；尚无旧译文但翻译开启时保持 pending，
+                        # 避免每次 ASR 改写都在「有 翻译中… / 无 翻译中…」之间来回跳动闪烁。
                         stale = rec.get('tr') or rec.get('_tr_stale')
                         self._invalidate_translation(rec)
-                        if stale and self.trans_on:
-                            rec['_tr_stale'] = stale
+                        if self.trans_on:
+                            if stale:
+                                rec['_tr_stale'] = stale
+                            rec['tr_status'] = 'pending'
+                            self.pending_tr[idx] = time.time()
                         if not self.speaker_filter or rec["name"] == self.speaker_filter:
                             self.update_record(idx, rec)
                         # 文本还在改写：重置稳定计时，译文稍后重做
                         self.autosave(rec)
-                        if self.trans_on:
-                            self.pending_tr[idx] = time.time()
                 elif kind == "tr":
                     token, tr, meta = a
                     request = self.tr_requests.pop(token, None)
@@ -2001,9 +2116,10 @@ class App:
             if rid >= len(self.records):
                 continue
             rec = self.records[rid]
-            rec["tr_status"] = "pending"
-            if not self.speaker_filter or rec["name"] == self.speaker_filter:
-                self.draw_translation(rid, rec)
+            if rec.get("tr_status") != "pending":
+                rec["tr_status"] = "pending"
+                if not self.speaker_filter or rec["name"] == self.speaker_filter:
+                    self.draw_translation(rid, rec)
             self._submit_translation(rid)
         # 服务端报告的 token 用量
         if ready or int(now) % 2 == 0:

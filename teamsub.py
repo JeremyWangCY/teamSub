@@ -85,7 +85,7 @@ RESOURCE_DIR = _resource_dir()  # 只读资源（随 exe 打包）
 # 常量放在模块顶层（而不是 pyproject/打包元数据里），是为了让源码运行、
 # 冻结成 exe 两种方式读到的都是同一个值。
 APP_DISPLAY_NAME = "TeamSub"
-APP_VERSION = "0.2.11"
+APP_VERSION = "0.2.12"
 
 CAPTION_DIR = Path(os.environ.get("TEAMSUB_DATA_DIR", APP_DIR)) / "captions"
 
@@ -2849,19 +2849,25 @@ class App:
         except Exception:
             self._clear_previous_stamp(data)
             return
-        same_as_current = bool(self.save_path) and str(target) == str(self.save_path)
+        db_target = target.with_suffix(".sqlite3")
+        session_path = db_target if db_target.exists() else target
+        same_as_current = bool(self.save_path) and (
+            str(target) == str(self.save_path)
+            or str(db_target) == str(Path(self.save_path).with_suffix(".sqlite3"))
+        )
         stale = time.time() - ts > 7 * 86400      # 一周前的残留不再打扰
-        if not data.get("path") or not target.exists() or same_as_current or stale:
+        if not data.get("path") or not session_path.exists() or same_as_current or stale:
             self._clear_previous_stamp(data)
             return
         title = data.get("title") or target.stem
         when = datetime.fromtimestamp(ts or time.time())
+        session = MR.Session(path=session_path, title=title, started="",
+                             count=0, legacy=(session_path.suffix.lower() == ".md"))
         self._confirm(
-            "上次会议「%s」（%s）没有正常结束——可能是崩溃、断电或被强制结束。\n\n"
-            "字幕已逐条写入磁盘，记录仍在：\n%s\n\n"
-            "要现在打开这份记录吗？打开只是查看，不会切换当前的采集源。"
-            % (title, when.strftime("%m-%d %H:%M"), target.name),
-            lambda: self._open_file(target), "打开记录", push=False)
+            "上次会议「%s」（%s）没有正常结束——可能是重启、崩溃或被强制结束。\n\n"
+            "字幕已逐条写入磁盘，是否直接在 TeamSub 内续接这场会议继续记录？"
+            % (title, when.strftime("%m-%d %H:%M")),
+            lambda: self.resume_meeting(session, confirm=False), "续接上次会议", push=False)
         self._clear_previous_stamp(data)
 
     @staticmethod
@@ -3066,7 +3072,7 @@ class App:
                 self.flash('会议已保存，可导出或新建下一场')
         self._confirm('结束本次采集并保存会议？仍可导出整场内容。', end, '结束并归档', push=False)
 
-    def resume_meeting(self, session):
+    def resume_meeting(self, session, confirm=True):
         from meeting_translation import active_job
         if active_job(self, session.path):
             self._notice('这场会议正在补译，请等待完成或先取消补译。')
@@ -3104,6 +3110,7 @@ class App:
                 self.reader.records = seed
                 self.reader.open_pairs = [(r['name'],r.get('raw',r['name']),r['text']) for r in seed]
                 self.reader.open_records = seed
+                self.reader.open_prefix = [""] * len(seed)
                 self.reader.known_raw = {r.get('raw',r['name']) for r in seed}
                 self.reader.known_norm = {r['name'] for r in seed}
                 self.reader.meeting_title = title
@@ -3113,14 +3120,18 @@ class App:
                 self._meeting_txt = '续接：'+title
                 self.lbl_meeting.configure(text=self._meeting_txt)
                 self.lbl_save.configure(text='已保存 · '+self.save_path.stem[-12:])
-                self.btn_pause.set_text('暂停采集')
+                if hasattr(self, 'btn_pause'):
+                    self.btn_pause.set_text('暂停采集')
                 self.full_render()
                 self.show_live()
             def failed(exc):
                 self.reader.paused = self.paused
                 self._notice('无法读取所选会议，已保留当前记录：'+str(exc))
             self.background(load, apply, failed)
-        self._confirm(f'保存当前会议并续接「{session.title}」？请确认当前字幕采集源就是这场会议。', lambda: self._flush_before_switch(resume), '续接', push=False)
+        if confirm:
+            self._confirm(f'保存当前会议并续接「{session.title}」？请确认当前字幕采集源就是这场会议。', lambda: self._flush_before_switch(resume), '续接', push=False)
+        else:
+            self._flush_before_switch(resume)
 
     # ---------------- 退出流程 ----------------
     # 两个老问题的根都在这里：

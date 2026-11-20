@@ -214,6 +214,39 @@ class RecoveryPromptTests(ShellTestCase):
         self.assertFalse(self.app._sheet_open)
         previous.unlink()
 
+    def test_recovery_resumes_previous_session_in_app_instead_of_opening_md(self):
+        from datetime import datetime
+        from unittest.mock import patch
+        import ui_kit as UK
+        from caption_store import CaptionStore
+        cap_dir = A.session_stamp_path().parent
+        store = CaptionStore(cap_dir, '上次未完会议')
+        store.upsert({'id': 'rec-1', 'name': 'Jeremy Wang', 'raw': 'Jeremy Wang',
+                      'text': 'Welcome back.', 'ts': datetime(2026, 11, 20, 10, 0, 0),
+                      'backlog': False}, 'Jeremy Wang', '10:00:00')
+        prev_md = store.path
+        store.close()
+        self.write_stamp(prev_md)
+        self.start()
+        def walk(w):
+            yield w
+            for c in w.winfo_children():
+                yield from walk(c)
+        with patch.object(A.os, 'startfile') as startfile:
+            self.app._check_recovery()
+            self.pump()
+            btn = next(w for w in walk(self.app.sheet_layer)
+                       if isinstance(w, UK.Pill) and w.text == '续接上次会议')
+            btn.command()
+            deadline = time.monotonic() + 3.0
+            while time.monotonic() < deadline and not self.app.records:
+                self.pump(0.05)
+            startfile.assert_not_called()
+            self.assertEqual(len(self.app.records), 1)
+            self.assertEqual(self.app.records[0]['text'], 'Welcome back.')
+            self.assertEqual(len(self.app.reader.open_prefix), 1)
+            self.assertIn('续接：上次未完会议', self.app._meeting_txt)
+
 
 class RestoreVeilTests(unittest.TestCase):
     def setUp(self):

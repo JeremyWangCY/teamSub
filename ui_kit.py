@@ -25,7 +25,7 @@ _LIGHT = {
     "KNOB": "#FCFCFB",
     "A600": "#345CB0", "A500": "#4168BA", "A100": "#DFE7F7", "A50": "#EBF0FA",
     "FLOAT_BG": "#FCFCFB", "FLOAT_LINE": "#E3E8EF", "FLOAT_TEXT": "#222C3A",
-    "FLOAT_MUTED": "#778393", "FLOAT_ACCENT": "#285BC5",
+    "FLOAT_MUTED": "#778393", "FLOAT_ACCENT": "#345CB0",
     "FLOAT_BORDER": "#9EAFBF",
     "BUTTON_RED": "#9C5755",
     "GREEN": "#1C843A", "GREEN_F": "#34C759", "GREEN_S": "#E8F9ED",
@@ -766,7 +766,14 @@ class Segmented(tk.Canvas):
         if 0 <= i < len(self.options) and i != self.index:
             self.set(i, notify=True)
 
+    def get(self) -> str:
+        return self.options[self.index]
+
     def set(self, i, notify=False):
+        if isinstance(i, str):
+            if i not in self.options:
+                return
+            i = self.options.index(i)
         self.index = max(0, min(len(self.options) - 1, i))
         self._paint()
         if notify and self.command:
@@ -1241,6 +1248,146 @@ class Field(tk.Frame):
 
     def focus(self):
         self.entry.focus_set()
+
+
+class Stepper(tk.Frame):
+    """圆角数值步进器：左侧减、中间等宽数字输入与单位后缀、右侧加。"""
+
+    R = R_FIELD
+
+    def __init__(self, master, value=0, min_val=0, max_val=100000, step=1,
+                 unit="", width=140, height=34, bg=None, fill=None):
+        outer = bg or _parent_bg(master)
+        super().__init__(master, bg=outer, highlightthickness=0, bd=0,
+                         width=width, height=height)
+        self.pack_propagate(False)
+        self.min_val = int(min_val)
+        self.max_val = int(max_val)
+        self.step = max(1, int(step))
+        self.unit = unit
+        self.fill = fill or C.N100
+        self.h = height
+        self._focus = False
+        self._hover = False
+        self._hover_btn = None
+        self.cv = tk.Canvas(self, bg=outer, highlightthickness=0, bd=0)
+        self.cv.pack(fill="both", expand=True)
+        self.entry = tk.Entry(self.cv, bd=0, relief="flat", highlightthickness=0,
+                              bg=self.fill, fg=C.TEXT, font=F_MONO, justify="center",
+                              insertbackground=C.TEXT, selectbackground=C.A100,
+                              selectforeground=C.TEXT)
+        self.entry.insert(0, str(value))
+        self._win = self.cv.create_window(0, height / 2, anchor="center",
+                                          window=self.entry, height=height - 10)
+        self.cv.bind("<Configure>", self._resize)
+        self.cv.bind("<Motion>", self._on_motion)
+        self.cv.bind("<Leave>", self._on_leave)
+        self.cv.bind("<Button-1>", self._on_click)
+        self.entry.bind("<FocusIn>", lambda e: (setattr(self, "_focus", True), self._paint()))
+        self.entry.bind("<FocusOut>", lambda e: (setattr(self, "_focus", False), self._paint()))
+        self.entry.bind("<Up>", lambda e: (self._bump(1), "break")[1])
+        self.entry.bind("<Down>", lambda e: (self._bump(-1), "break")[1])
+        self._paint()
+
+    def _btn_w(self):
+        return 28
+
+    def _unit_w(self):
+        if not self.unit:
+            return 0
+        return tkfont.Font(font=F_MINI).measure(self.unit) + 6
+
+    def _paint(self):
+        w, h = self.cv.winfo_width(), self.h
+        if w <= 1:
+            return
+        self.cv.delete("shape")
+        fill = self.fill if (self._focus or not self._hover) else C.N150
+        if self.entry.cget("bg") != fill:
+            self.entry.configure(bg=fill)
+        ring_rect(self.cv, 0.5, 0.5, w - 0.5, h - 0.5, self.R,
+                  fill=fill, active=self._focus, tags="shape")
+        bw = self._btn_w()
+        # 左右步进区悬停底与分隔线
+        if self._hover_btn == "dec":
+            round_rect(self.cv, 2, 2, bw, h - 2, self.R - 2,
+                       fill=C.N200, outline=C.N200, tags="shape")
+        elif self._hover_btn == "inc":
+            round_rect(self.cv, w - bw, 2, w - 2, h - 2, self.R - 2,
+                       fill=C.N200, outline=C.N200, tags="shape")
+        self.cv.create_line(bw, 6, bw, h - 6, fill=C.LINE_D, tags="shape")
+        self.cv.create_line(w - bw, 6, w - bw, h - 6, fill=C.LINE_D, tags="shape")
+        # 减号 / 加号
+        cy = h / 2
+        self.cv.create_line(bw / 2 - 4, cy, bw / 2 + 4, cy,
+                            fill=C.SUB, width=1.4, capstyle="round", tags="shape")
+        rx = w - bw / 2
+        self.cv.create_line(rx - 4, cy, rx + 4, cy,
+                            fill=C.SUB, width=1.4, capstyle="round", tags="shape")
+        self.cv.create_line(rx, cy - 4, rx, cy + 4,
+                            fill=C.SUB, width=1.4, capstyle="round", tags="shape")
+        if self.unit:
+            self.cv.create_text(w - bw - 6, cy, text=self.unit, anchor="e",
+                                fill=C.T3, font=F_MINI, tags="shape")
+        self.cv.tag_lower("shape")
+
+    def _resize(self, e):
+        bw = self._btn_w()
+        uw = self._unit_w()
+        left = bw + 4
+        right = e.width - bw - uw - 4
+        ew = max(24, right - left)
+        self.cv.itemconfigure(self._win, width=ew, height=max(12, e.height - 10))
+        self.cv.coords(self._win, (left + right) / 2, e.height / 2)
+        self._paint()
+
+    def _hit(self, x):
+        w = self.cv.winfo_width()
+        bw = self._btn_w()
+        if x <= bw:
+            return "dec"
+        if x >= w - bw:
+            return "inc"
+        return None
+
+    def _on_motion(self, e):
+        btn = self._hit(e.x)
+        changed = (btn != self._hover_btn) or not self._hover
+        self._hover = True
+        self._hover_btn = btn
+        self.cv.configure(cursor="hand2" if btn else "xterm")
+        if changed:
+            self._paint()
+
+    def _on_leave(self, _):
+        self._hover = False
+        self._hover_btn = None
+        self.cv.configure(cursor="")
+        self._paint()
+
+    def _on_click(self, e):
+        btn = self._hit(e.x)
+        if btn == "dec":
+            self._bump(-1)
+        elif btn == "inc":
+            self._bump(1)
+        else:
+            self.entry.focus_set()
+
+    def _bump(self, direction):
+        try:
+            cur = int(self.entry.get().strip())
+        except ValueError:
+            cur = self.min_val
+        nxt = max(self.min_val, min(self.max_val, cur + direction * self.step))
+        self.set(str(nxt))
+
+    def get(self) -> str:
+        return self.entry.get()
+
+    def set(self, v):
+        self.entry.delete(0, "end")
+        self.entry.insert(0, str(v))
 
 
 # ------------------------------------------------------------------ 圆角文本域
@@ -1963,7 +2110,7 @@ class RowList(tk.Canvas):
     业务代码与测试可以照旧按 Listbox 的方式驱动。
     """
 
-    ROW_H = 54
+    ROW_H = 58
 
     def __init__(self, master, bg=None, font=None):
         self.bgcol = C.N0 if bg is None else bg
@@ -2038,22 +2185,24 @@ class RowList(tk.Canvas):
         for i, item in enumerate(self.items):
             y = i * self.ROW_H
             on = i in self.sel
-            if on or i == self._hover:
-                fill = C.A50 if on else C.N100
-                round_rect(self, 0.5, y + 2, w - 0.5, y + self.ROW_H - 2, 10,
-                           fill=fill, outline=fill)
-            elif i and (i - 1) not in self.sel and (i - 1) != self._hover:
-                self.create_line(14, y, w - 14, y, fill=C.LINE)
+            if on:
+                fill, outline = C.A50, C.A100
+            elif i == self._hover:
+                fill, outline = C.N100, C.LINE_D
+            else:
+                fill, outline = C.N50, C.LINE
+            round_rect(self, 0.5, y + 3, w - 0.5, y + self.ROW_H - 3, 10,
+                       fill=fill, outline=outline, width=1)
             aside_w = 0
             if item["aside"]:
                 aside_w = tkfont.Font(font=F_TIME).measure(item["aside"]) + 16
                 self.create_text(w - 14, y + self.ROW_H / 2, text=item["aside"],
                                  anchor="e", fill=C.T3, font=F_TIME)
             room = max(40, w - 28 - aside_w)
-            self.create_text(14, y + 18, anchor="w", font=title_font,
+            self.create_text(14, y + 20, anchor="w", font=title_font,
                              text=fit_text(item["title"], title_font, room),
                              fill=C.A600 if on else C.TEXT)
-            self.create_text(14, y + 38, anchor="w", font=meta_font,
+            self.create_text(14, y + 40, anchor="w", font=meta_font,
                              text=fit_text(item["meta"], meta_font, room), fill=C.SUB)
         if self._focused and self._anchor is not None and self._anchor < n:
             y = self._anchor * self.ROW_H

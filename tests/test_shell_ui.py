@@ -348,7 +348,7 @@ class WatchdogAndSettingsGuardTests(ShellTestCase):
         self.app.open_settings()
         self.pump()
         selects = [w for w in self.walk(self.app.sheet_layer)
-                   if isinstance(w, UK.Select) and '高' in getattr(w, 'options', ())]
+                   if isinstance(w, (UK.Select, UK.Segmented)) and '高' in getattr(w, 'options', ())]
         self.assertEqual(len(selects), 1)
         sel_reason = selects[0]
         asked = []

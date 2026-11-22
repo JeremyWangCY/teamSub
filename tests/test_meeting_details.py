@@ -101,7 +101,7 @@ class MeetingDetailsTests(GuiTestCase):
         with patch.object(support.A,'CAPTION_DIR',Path(self.temporary.name)):
             self.app.open_history()
             self.pump()
-            buttons=[self.button(text) for text in ('打开记录','导出 / 合并所选','续接所选会议','删除','打开记录文件夹','刷新')]
+            buttons=[self.button(text) for text in ('打开记录','导出 / 合并','续接','重命名','删除','打开记录文件夹','刷新')]
             for button in buttons:
                 self.assertTrue(button.winfo_ismapped())
                 self.assertEqual(button.winfo_width(),button.winfo_reqwidth())

@@ -85,7 +85,7 @@ RESOURCE_DIR = _resource_dir()  # 只读资源（随 exe 打包）
 # 常量放在模块顶层（而不是 pyproject/打包元数据里），是为了让源码运行、
 # 冻结成 exe 两种方式读到的都是同一个值。
 APP_DISPLAY_NAME = "TeamSub"
-APP_VERSION = "0.2.13"
+APP_VERSION = "0.2.14"
 
 CAPTION_DIR = Path(os.environ.get("TEAMSUB_DATA_DIR", APP_DIR)) / "captions"
 
@@ -2414,8 +2414,10 @@ class App:
         self.svc = TranslationService(copy.deepcopy(self.tcfg), self._on_tr_result)
         self.svc.start()
         self.trans_on = True
-        self.btn_tr.set_text("翻译 开")
-        self.btn_tr.set_kind("tint")
+        if hasattr(self, "sw_tr"):
+            self.sw_tr.set(True, notify=False)
+        if hasattr(self, "lbl_tr"):
+            self.lbl_tr.configure(fg=UK.C.TEXT)
         # 启动时不追译全部历史：只补最近 backlog_max 条，其余按需点「翻译历史」
         ids = [i for i in range(len(self.records)) if not self.records[i].get("tr_status")]
         limit = max(0, self.tcfg.backlog_max)
@@ -2439,8 +2441,10 @@ class App:
         if self.svc:
             self.svc.stop()
             self.svc = None
-        self.btn_tr.set_text("翻译 关")
-        self.btn_tr.set_kind("ghost")
+        if hasattr(self, "sw_tr"):
+            self.sw_tr.set(False, notify=False)
+        if hasattr(self, "lbl_tr"):
+            self.lbl_tr.configure(fg=UK.C.SUB)
         self.lbl_cache.configure(text="")
 
     def toggle_translate(self):
@@ -2450,6 +2454,8 @@ class App:
             self.tcfg.enabled = False
         else:
             self.tcfg.enabled = bool(self.start_translation())
+            if not self.tcfg.enabled and hasattr(self, "sw_tr"):
+                self.sw_tr.set(False, notify=False)
         self.tcfg.save()
 
     def on_mode_pick(self, mode, lang_a, lang_b):
@@ -2664,7 +2670,7 @@ class App:
         self.paused = not self.paused
         self.reader.paused = self.paused
         if hasattr(self, "btn_pause"):
-            self.btn_pause.set_text("继续采集" if self.paused else "暂停采集")
+            self.btn_pause.set_text("继续" if self.paused else "暂停")
         self.on_status("paused" if self.paused else "ok")
         self.flash("已暂停采集" if self.paused else "已恢复采集")
 
@@ -2912,58 +2918,106 @@ class App:
         frontend_views.open_export(self, initial_format='srt')
 
     def show_help(self):
-        """帮助：一屏放完的快捷键/操作表。
-
-        旧版把每节写成一句句长文案堆在 Label 里，窗口一小就要滚动，而且
-        读起来像说明书。这里改成「操作 → 效果」两列表格：不滚、不堆、
-        一眼能找到要按哪个键。
-        """
+        """帮助：一屏双列速查，零子标签碎片，数据目录可一键打开。"""
         import frontend_views as FV
+
         def build(parent):
             b = FV.card(parent)
-            head = tk.Label(b, bg=UK.C.N0, fg=UK.C.SUB, font=UK.F_MINI,
-                            anchor='w', justify='left')
-            head.pack(fill='x')
-            head.configure(text=f"数据目录  {data_dir()}",
-                           wraplength=680)
-            tabs = tk.Frame(b, bg=UK.C.N0)
-            tabs.pack(anchor='w', pady=(10, 12))
-            grid = tk.Frame(b, bg=UK.C.N0)
-            grid.pack(fill='both', expand=True)
-            grid.columnconfigure(1, weight=1)
-            rows = {
-                '采集': [('Ctrl+E', '导出整场记录'), ('点「清屏」', '只隐藏显示，记录保留'),
-                         ('点「新建」', '归档当前会议并开始新记录'), ('点「结束」', '归档并暂停采集')],
-                '导出': [('Markdown / 纯文本', '整场记录，不受搜索和筛选影响'),
-                         ('SRT 字幕', '按采集相对时间；未知时间会让你选阅读时间轴'),
-                         ('原文 / 译文 / 对照', '导出时选择需要的内容'),
-                         ('补译', '在会议记录里补译，译文自动保存')],
-                '历史': [('Ctrl 多选', '按列表顺序合并导出，保留来源'), ('续接', '把所选会议设为当前记录'),
-                         ('删除', '移入系统回收站，可还原'), ('旧版 Markdown', '缺时间的一律记为未知')],
-                '操作': [('Ctrl+F', '搜索'), ('Ctrl+L', '清屏'), ('Escape', '返回上一层'),
-                         ('点失败译文', '重试该条'), ('右键译文', '修正译法'),
-                         ('右键正文', '复制 / 全选'), ('更多菜单', '置顶、悬浮窗、导出')],
-                '导航': [('Ctrl+1', '实时会议'), ('Ctrl+2', '历史会议'), ('Ctrl+,', '设置'),
-                         ('F1', '帮助'), ('悬停按钮', '显示用途与快捷键')]}
-            buttons = []
-            holder = {}
+            # 顶部数据目录条：先放右侧按钮，路径过长时自动省略，绝不挤裁按钮
+            dir_bar = tk.Frame(b, bg=UK.C.N50, padx=12, pady=8)
+            dir_bar.pack(fill='x', pady=(0, 14))
+            dpath = data_dir()
+            dpath_str = str(dpath)
 
-            def select(key):
-                for w in grid.winfo_children():
-                    w.destroy()
-                for r, (how, what) in enumerate(rows[key]):
-                    tk.Label(grid, text=how, bg=UK.C.N0, fg=UK.C.TEXT, font=UK.F_UI,
-                             anchor='w').grid(row=r, column=0, sticky='w', pady=3)
-                    tk.Label(grid, text=what, bg=UK.C.N0, fg=UK.C.SUB, font=UK.F_UI,
-                             anchor='w', justify='left').grid(row=r, column=1, sticky='w', padx=(18, 0), pady=3)
-                for name, btn in buttons:
-                    btn.set_kind('selected' if name == key else 'tab')
-            for key in rows:
-                btn = UK.Pill(tabs, key, lambda key=key: select(key), kind='tab', bg=UK.C.N0)
-                btn.pack(side='left', padx=(0, 8))
-                buttons.append((key, btn))
-            b.bind('<Configure>', lambda e: head.configure(wraplength=max(200, UK.lpx(e.width) - 10)))
-            select('采集')
+            def open_data_dir():
+                try:
+                    dpath.mkdir(parents=True, exist_ok=True)
+                    os.startfile(str(dpath.resolve()))
+                except OSError as exc:
+                    self._notice('无法打开数据目录：' + str(exc))
+
+            btn_open = UK.Pill(dir_bar, '打开目录', open_data_dir, kind='secondary',
+                               height=28, padx=10, bg=UK.C.N50, font=UK.F_MINI)
+            btn_open.pack(side='right', padx=(10, 0))
+            tk.Label(dir_bar, text='数据目录', bg=UK.C.N50, fg=UK.C.SUB,
+                     font=UK.F_SMALL).pack(side='left', padx=(0, 10))
+            dir_lbl = tk.Label(dir_bar, text=dpath_str, bg=UK.C.N50, fg=UK.C.TEXT,
+                               font=UK.F_MONO, anchor='w')
+            dir_lbl.pack(side='left', fill='x', expand=True)
+
+            def fit_dir_label(event=None):
+                avail = max(120, UK.lpx(dir_bar.winfo_width()) - 170)
+                dir_lbl.configure(text=UK.fit_text(dpath_str, UK.F_MONO, avail))
+
+            dir_bar.bind('<Configure>', fit_dir_label)
+            UK.Tooltip(dir_lbl, dpath_str)
+
+            # 双列紧凑速查
+            cols = tk.Frame(b, bg=UK.C.N0)
+            cols.pack(fill='both', expand=True)
+            cols.columnconfigure(0, weight=1, uniform='helpcol')
+            cols.columnconfigure(1, weight=1, uniform='helpcol')
+            left_col = tk.Frame(cols, bg=UK.C.N0)
+            left_col.grid(row=0, column=0, sticky='nsew', padx=(0, 20))
+            right_col = tk.Frame(cols, bg=UK.C.N0)
+            right_col.grid(row=0, column=1, sticky='nsew', padx=(20, 0))
+
+            left_groups = [
+                ('采集与会议', [
+                    ('Ctrl+E', '导出整场记录'),
+                    ('清屏', '仅隐藏当前屏幕，记录保留'),
+                    ('新建', '归档当前会议并开始新记录'),
+                    ('结束', '归档并暂停采集'),
+                ]),
+                ('导出与补译', [
+                    ('MD / TXT', '整场导出，不受筛选影响'),
+                    ('SRT', '按相对时间，可选阅读时间轴'),
+                    ('补译', '在历史详情里补译未译条目'),
+                ]),
+                ('历史记录', [
+                    ('Ctrl 多选', '按列表顺序合并导出'),
+                    ('F2', '重命名所选会议'),
+                    ('续接', '回到实时页继续记录该会议'),
+                    ('删除', '移入系统回收站，可还原'),
+                ]),
+            ]
+            right_groups = [
+                ('快捷操作', [
+                    ('Ctrl+F', '搜索原文、译文或发言人'),
+                    ('Ctrl+L', '清屏'),
+                    ('Escape', '返回上一层'),
+                    ('点失败译文', '重试该条翻译'),
+                    ('右键译文', '修正译法并记入主题'),
+                    ('右键正文', '复制选中 / 全选'),
+                    ('更多菜单', '置顶、悬浮窗、主题切换'),
+                ]),
+                ('页面导航', [
+                    ('Ctrl+1', '实时会议'),
+                    ('Ctrl+2', '历史会议'),
+                    ('Ctrl+,', '设置'),
+                    ('F1', '打开帮助'),
+                ]),
+            ]
+
+            def render_groups(host, groups):
+                for idx, (heading, items) in enumerate(groups):
+                    tk.Label(host, text=heading, bg=UK.C.N0, fg=UK.C.TEXT,
+                             font=UK.F_NAME, anchor='w').pack(anchor='w', pady=(0 if idx == 0 else 12, 4))
+                    tk.Frame(host, bg=UK.C.LINE, height=1).pack(fill='x', pady=(0, 6))
+                    tbl = tk.Frame(host, bg=UK.C.N0)
+                    tbl.pack(fill='x')
+                    tbl.columnconfigure(1, weight=1)
+                    for r, (how, what) in enumerate(items):
+                        is_key = any(c in how for c in ('+', 'F1', 'F2', 'Esc', 'MD', 'SRT'))
+                        tk.Label(tbl, text=how, bg=UK.C.N100, fg=UK.C.TEXT,
+                                 font=UK.F_TIME if is_key else UK.F_MINI,
+                                 padx=6, pady=2, anchor='w').grid(row=r, column=0, sticky='w', pady=3)
+                        tk.Label(tbl, text=what, bg=UK.C.N0, fg=UK.C.SUB,
+                                 font=UK.F_SMALL, anchor='w', justify='left').grid(
+                            row=r, column=1, sticky='w', padx=(10, 0), pady=3)
+
+            render_groups(left_col, left_groups)
+            render_groups(right_col, right_groups)
         self._show_sheet('帮助', build)
 
     def background(self, work, done, failed=None):
@@ -3055,7 +3109,7 @@ class App:
             self._do_clear()
             self.paused = self.reader.paused = False
             if hasattr(self, 'btn_pause'):
-                self.btn_pause.set_text('暂停采集')
+                self.btn_pause.set_text('暂停')
             self.flash('已新建独立会议记录')
         self._confirm('归档当前记录并开始新会议？同名会议也会分别保存。', lambda: self._flush_before_switch(start), '新建会议', push=False)
 
@@ -3063,7 +3117,7 @@ class App:
         def end():
             self.paused = self.reader.paused = True
             if hasattr(self, 'btn_pause'):
-                self.btn_pause.set_text('继续采集')
+                self.btn_pause.set_text('继续')
             self.status.set('已归档 · 暂停采集', UK.C.SUB)
             store = self.save_store
             if store and hasattr(store, 'flush'):
@@ -3121,7 +3175,7 @@ class App:
                 self.lbl_meeting.configure(text=self._meeting_txt)
                 self.lbl_save.configure(text='已保存 · '+self.save_path.stem[-12:])
                 if hasattr(self, 'btn_pause'):
-                    self.btn_pause.set_text('暂停采集')
+                    self.btn_pause.set_text('暂停')
                 self.full_render()
                 self.show_live()
             def failed(exc):

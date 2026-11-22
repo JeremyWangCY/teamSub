@@ -56,8 +56,18 @@ def open_export(app, records=None, title=None, initial_format=None):
             scope_seg.pack(side='left', padx=(0, 12))
             scope_seg.set(0)
         fmt_opts = ['Markdown', 'TXT', 'SRT']
+        srt_check_holder = {}
+        def on_fmt_pick(v):
+            pick['fmt'] = v
+            chk = srt_check_holder.get('w')
+            if chk is not None:
+                if v == 'SRT':
+                    if not chk.winfo_manager():
+                        chk.pack(side='left', padx=(0, 16))
+                else:
+                    chk.pack_forget()
         fmt_seg = UK.Segmented(row, fmt_opts,
-                               command=lambda v: pick.update(fmt=v), bg=UK.C.N0)
+                               command=on_fmt_pick, bg=UK.C.N0)
         fmt_seg.pack(side='left', padx=(0, 12))
         fmt_seg.set(fmt_opts.index(pick['fmt']) if pick['fmt'] in fmt_opts else 0)
         cnt_opts = ['对照', '原文', '译文']
@@ -70,11 +80,14 @@ def open_export(app, records=None, title=None, initial_format=None):
         name = tk.BooleanVar(value=saved.get('names', True) if isinstance(saved.get('names', True), bool) else True)
         stamp = tk.BooleanVar(value=saved.get('timestamps', True) if isinstance(saved.get('timestamps', True), bool) else True)
         synthetic = tk.BooleanVar(value=saved.get('synthetic_timing', False) if isinstance(saved.get('synthetic_timing', False), bool) else False)
-        def check(text, var):
-            UK.Check(choices, text, var, bg=UK.C.N0).pack(side='left', padx=(0, 16))
+        def check(text, var, show=True):
+            w = UK.Check(choices, text, var, bg=UK.C.N0)
+            if show:
+                w.pack(side='left', padx=(0, 16))
+            return w
         check('包含姓名', name)
         check('正文时间', stamp)
-        check('SRT 阅读时间轴（每条 3 秒）', synthetic)
+        srt_check_holder['w'] = check('SRT 阅读时间轴（每条 3 秒）', synthetic, show=(pick['fmt'] == 'SRT'))
         note = label(b, '', small=True)
         preview = tk.Text(b, height=3, wrap='word', bg=UK.C.N100, fg=UK.C.TEXT,
                           font=UK.F_UI, padx=16, pady=12, relief='flat', bd=0)
@@ -321,8 +334,6 @@ def open_history(app):
                 state['all'] = [session if s.path == session.path else s for s in state['all']]
                 filter_list()
             rename_meeting(app, sessions[0], renamed)
-        UK.Pill(search_row, '重命名', rename_selected, kind='ghost', bg=UK.C.N0,
-                icon='edit', tooltip='F2').pack(side='left', padx=8)
         listing.bind('<F2>', lambda e: rename_selected())
         def read(action):
             sessions = selected()
@@ -425,21 +436,23 @@ def open_history(app):
         app._sheet_footer.pack(side='bottom',fill='x',padx=24,pady=(8,12))
         row = tk.Frame(app._sheet_footer,bg=UK.C.N50)
         row.pack(fill='x')
-        # 1000px 最小窗口下整排要放得下：只给主操作配图标。
-        for text, action, kind, icon in [('打开记录','view','tint',None),
-                                         ('导出 / 合并所选','export','primary','export'),
-                                         ('续接所选会议','resume','ghost',None)]:
-            UK.Pill(row,text,lambda a=action: read(a),kind=kind,icon=icon).pack(side='left',padx=(0,10))
-        UK.Pill(row,'删除',do_delete,kind='danger',icon='trash',
-                tooltip='移入系统回收站，可还原').pack(side='left',padx=(0,10))
+        # 1000px 最小窗口下整排要放得下：所有行操作统一收敛到底栏。
+        for text, action, kind, icon in [('打开记录', 'view', 'tint', None),
+                                         ('导出 / 合并', 'export', 'primary', 'export'),
+                                         ('续接', 'resume', 'ghost', None)]:
+            UK.Pill(row, text, lambda a=action: read(a), kind=kind, icon=icon, padx=12).pack(side='left', padx=(0, 8))
+        UK.Pill(row, '重命名', rename_selected, kind='ghost', icon='edit',
+                padx=10, tooltip='F2').pack(side='left', padx=(0, 8))
+        UK.Pill(row, '删除', do_delete, kind='danger', icon='trash', padx=10,
+                tooltip='移入系统回收站，可还原').pack(side='left', padx=(0, 8))
         def open_records_folder():
             try:
                 CAPTION_DIR.mkdir(parents=True, exist_ok=True)
                 os.startfile(str(CAPTION_DIR.resolve()))
             except OSError as exc:
                 app._notice('无法打开记录文件夹：' + str(exc))
-        UK.Pill(row,'刷新',refresh,kind='ghost',icon='refresh').pack(side='right')
-        UK.Pill(row,'打开记录文件夹',open_records_folder,kind='secondary').pack(side='right',padx=(0,8))
+        UK.Pill(row, '刷新', refresh, kind='ghost', icon='refresh', padx=10).pack(side='right')
+        UK.Pill(row, '打开记录文件夹', open_records_folder, kind='secondary', padx=10).pack(side='right', padx=(0, 6))
         listing.bind('<Double-Button-1>',lambda e: read('view'))
         refresh()
     app._show_sheet('历史会议', build)

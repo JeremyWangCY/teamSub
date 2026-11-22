@@ -156,14 +156,22 @@ def build(self):
     self.btn_more = UK.Pill(rt, "", self._open_menu, kind="ghost", padx=10,
                             icon="more", icon_size=18, tooltip="更多")
     self.btn_more.pack(side="right", padx=(6, 0))
-    self.btn_tr = UK.Pill(rt, "翻译 开" if self.trans_on else "翻译 关", self.toggle_translate,
-                          kind="tint" if self.trans_on else "ghost", icon="translate")
-    self.btn_tr.pack(side="right")
+    tr_box = tk.Frame(rt, bg=UK.C.N50)
+    tr_box.pack(side="right", padx=(0, 4))
+    self.lbl_tr = tk.Label(tr_box, text="翻译", bg=UK.C.N50,
+                           fg=UK.C.TEXT if self.trans_on else UK.C.SUB,
+                           font=UK.F_SMALL, cursor="hand2")
+    self.lbl_tr.pack(side="left", padx=(0, 8))
+    self.sw_tr = UK.Switch(tr_box, value=bool(self.trans_on),
+                           command=lambda _v: self.toggle_translate(), bg=UK.C.N50)
+    self.sw_tr.pack(side="left")
+    self.lbl_tr.bind("<Button-1>", lambda _e: self.sw_tr.toggle())
+    UK.Tooltip(self.sw_tr, "开启或关闭实时翻译")
 
-    # ---------- 检索 + 翻译方向 ----------
+    # ---------- 检索 + 主题 + 翻译方向 ----------
     bar = tk.Frame(r, bg=UK.C.N50)
-    bar.pack(fill="x", padx=24, pady=(0, 14))
-    self.search = UK.SearchBox(bar, width=240, placeholder="搜索原文、译文或发言人",
+    bar.pack(fill="x", padx=24, pady=(0, 12))
+    self.search = UK.SearchBox(bar, width=220, placeholder="搜索原文、译文或发言人",
                                on_change=self.apply_search, bg=UK.C.N50)
     self.search.pack(side="left")
     self.seg = UK.DirectionPicker(bar, lang_names(), self.tcfg.mode, tcfg_pair(self.tcfg),
@@ -172,14 +180,13 @@ def build(self):
     self.seg.pack(side="right")
 
     # 常驻上下文只读取已保存的配置，浏览设置草稿不会改变这里。
-    topic_slot = tk.Frame(bar, bg=UK.C.N50, width=1, height=36)
-    topic_slot.pack(side="left", fill="x", expand=True, padx=12)
-    topic_slot.pack_propagate(False)
-    tk.Label(topic_slot, text="翻译主题", font=UK.F_MINI, bg=UK.C.N50,
-             fg=UK.C.SUB).pack(side="left", padx=(0, 8))
+    topic_slot = tk.Frame(bar, bg=UK.C.N50)
+    topic_slot.pack(side="left", padx=(14, 12))
+    tk.Label(topic_slot, text="主题", font=UK.F_MINI, bg=UK.C.N50,
+             fg=UK.C.SUB).pack(side="left", padx=(0, 6))
     self.topic_select = UK.SearchSelect(topic_slot, [], command=self.on_topic_pick, pop_w=220,
-                                   height=36, width=120, bg=UK.C.N50, font=UK.F_SMALL)
-    self.topic_select.pack(side="left", fill="x", expand=True)
+                                   height=36, width=168, bg=UK.C.N50, font=UK.F_SMALL)
+    self.topic_select.pack(side="left")
     refresh_topic(self)
 
     # 长名称可通过悬停或键盘聚焦查看全称；提示随控件销毁而销毁。
@@ -237,39 +244,46 @@ def build(self):
     body.pack(fill="both", expand=True, padx=24)
 
     side = UK.Card(body, radius=UK.R_CARD, padding=16, bg=UK.C.N50)
-    side.configure(width=200)
+    side.configure(width=192)
     side.pack(side="left", fill="y")
     side.pack_propagate(False)
     self.speakers = UK.SpeakerList(side.body, on_pick=self.on_pick_speaker,
                                    bg=UK.C.N0)
     self.speakers.pack(fill="both", expand=True)
 
-    readbar = tk.Frame(self.content, bg=UK.C.N50)
-    readbar.pack(fill="x", padx=24, pady=(0, 10), before=body)
-    self.display_switch = UK.Segmented(readbar, ["双语", "原文", "译文"], command=self.set_display, bg=UK.C.N50)
-    self.display_switch.pack(side="left")
-    self.display_switch.set({"both":0, "source":1, "translation":2}.get(getattr(self, "display_mode", "both"), 0))
-    UK.Pill(readbar, "字号 / 间距", self.open_reading, kind="ghost",
-            icon="text-size").pack(side="left", padx=12)
-    self.btn_pause = UK.Pill(readbar, "继续采集" if self.paused else "暂停采集", self.toggle_pause,
-                             kind="ghost", icon={"暂停采集": "pause", "继续采集": "play"},
-                             icon_size=14)
-    self.btn_pause.pack(side="right")
-    UK.Pill(readbar, "结束", self.end_meeting, kind="danger", padx=12, icon="stop",
-            icon_size=14).pack(side="right", padx=4)
-    UK.Pill(readbar, "新建", self.new_meeting, kind="ghost", padx=12,
-            icon="plus").pack(side="right", padx=4)
-    UK.Pill(readbar, "清屏", self.clear, kind="ghost", icon="clear",
-            tooltip="Ctrl+L").pack(side="right", padx=4)
     card = UK.Card(body, radius=UK.R_CARD, padding=16, bg=UK.C.N50)
     card.pack(side="left", fill="both", expand=True, padx=(14, 0))
 
-    self.txt = tk.Text(card.body, wrap="word", bg=UK.C.N0, fg=UK.C.TEXT,
+    # 阅读视图与采集控制收进正文卡顶栏，外部只保留两行控制条。
+    readbar = tk.Frame(card.body, bg=UK.C.N0)
+    readbar.pack(fill="x", pady=(0, 10))
+    self.display_switch = UK.Segmented(readbar, ["双语", "原文", "译文"], command=self.set_display,
+                                       height=32, bg=UK.C.N0)
+    self.display_switch.pack(side="left")
+    self.display_switch.set({"both":0, "source":1, "translation":2}.get(getattr(self, "display_mode", "both"), 0))
+    UK.Pill(readbar, "字号", self.open_reading, kind="ghost", height=32, padx=10,
+            bg=UK.C.N0, icon="text-size", tooltip="字号与行距").pack(side="left", padx=(8, 0))
+    self.btn_pause = UK.Pill(readbar, "继续" if self.paused else "暂停", self.toggle_pause,
+                             kind="ghost", height=32, padx=10, bg=UK.C.N0,
+                             icon={"暂停": "pause", "继续": "play"},
+                             icon_size=14, tooltip="暂停或继续采集")
+    self.btn_pause.pack(side="right")
+    UK.Pill(readbar, "结束", self.end_meeting, kind="danger", height=32, padx=10, bg=UK.C.N0,
+            icon="stop", icon_size=14).pack(side="right", padx=(0, 4))
+    UK.Pill(readbar, "新建", self.new_meeting, kind="ghost", height=32, padx=10, bg=UK.C.N0,
+            icon="plus").pack(side="right", padx=(0, 4))
+    UK.Pill(readbar, "清屏", self.clear, kind="ghost", height=32, padx=10, bg=UK.C.N0,
+            icon="clear", tooltip="Ctrl+L").pack(side="right", padx=(0, 4))
+    tk.Frame(card.body, bg=UK.C.LINE, height=1).pack(fill="x", pady=(0, 10))
+
+    txt_host = tk.Frame(card.body, bg=UK.C.N0)
+    txt_host.pack(fill="both", expand=True)
+    self.txt = tk.Text(txt_host, wrap="word", bg=UK.C.N0, fg=UK.C.TEXT,
                        font=UK.F_BODY, bd=0, highlightthickness=0,
                        padx=6, pady=0, spacing1=2, spacing3=6,
                        selectbackground=UK.C.A100, selectforeground=UK.C.TEXT,
                        insertbackground=UK.C.TEXT, undo=False)
-    sb = UK.ThinScroll(card.body, self.txt, bg=UK.C.N0,
+    sb = UK.ThinScroll(txt_host, self.txt, bg=UK.C.N0,
                        on_user_scroll=self._sync_scroll_hint)
     sb.pack(side="right", fill="y", padx=(6, 0))
     self.txt.pack(side="left", fill="both", expand=True)
@@ -282,10 +296,10 @@ def build(self):
     self.txt.tag_configure("empty", foreground=UK.C.T3, font=UK.F_UI,
                            spacing1=4, spacing3=4)
 
-    self.to_bottom = UK.Pill(card.body, "回到底部", self._jump_bottom,
+    self.to_bottom = UK.Pill(txt_host, "回到底部", self._jump_bottom,
                              kind="tint", height=30, icon="arrow-down", icon_size=14)
 
-    build_empty_state(self, card.body)
+    build_empty_state(self, txt_host)
 
     self.txt.tag_bind("trfail", "<Button-1>", self.on_retry_click)
     self.txt.tag_bind("trfail", "<Enter>",

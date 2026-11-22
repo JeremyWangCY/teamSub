@@ -89,7 +89,7 @@ class FloatBar:
         self.header_line = tk.Frame(body, bg=UK.C.FLOAT_LINE, height=1)
         self.header_line.grid(row=1, column=0, sticky="we", pady=(8, 0))
         viewport = tk.Frame(body, bg=UK.C.FLOAT_BG)
-        viewport.grid(row=2, column=0, sticky="nsew")
+        viewport.grid(row=2, column=0, sticky="nsew", pady=(8, 0))
         body.rowconfigure(2, weight=1)
         self.content_canvas = tk.Canvas(viewport, bg=UK.C.FLOAT_BG, highlightthickness=0,
                                         bd=0, height=50)

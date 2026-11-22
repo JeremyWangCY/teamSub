@@ -156,8 +156,6 @@ def build(self):
     self.btn_more = UK.Pill(rt, "", self._open_menu, kind="ghost", padx=10,
                             icon="more", icon_size=18, tooltip="更多")
     self.btn_more.pack(side="right", padx=(6, 0))
-    self.btn_settings = UK.Pill(rt, "设置", self.open_settings, kind="ghost", icon="settings")
-    # 设置入口也常驻在左侧导航里，这里不再重复放一个按钮。
     self.btn_tr = UK.Pill(rt, "翻译 开" if self.trans_on else "翻译 关", self.toggle_translate,
                           kind="tint" if self.trans_on else "ghost", icon="translate")
     self.btn_tr.pack(side="right")

@@ -265,7 +265,7 @@ def open_settings(self, page="服务"):
                                         ('API 请求','calls'),('统计范围','scope')]):
             frame = cell(pages[4], title, i//2, i%2)
             label = tk.Label(frame, text='—', bg=W, fg=UK.C.TEXT,
-                              font=UK.F_UI if key == 'scope' else ('Consolas', 11), anchor='w')
+                              font=UK.F_UI if key == 'scope' else UK.F_MONO, anchor='w')
             label.pack(fill='x', pady=(4,12))
             usage_labels[key] = label
         def refresh_usage():
@@ -695,8 +695,7 @@ def open_settings(self, page="服务"):
             import frontend_shell
             frontend_shell.refresh_topic(self)
             refresh_topic_state()
-            if (old_topic != self.tcfg.topic or old_mode != (self.tcfg.mode, self.tcfg.pair())
-                    or old_ver != self.tcfg.topic_version()):
+            if old_mode != (self.tcfg.mode, self.tcfg.pair()):
                 for rec in self.records:
                     self._invalidate_translation(rec)
                     self.autosave(rec)

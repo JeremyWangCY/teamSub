@@ -40,20 +40,31 @@ def open_export(app, records=None, title=None, initial_format=None):
         saved = getattr(app.tcfg, 'export_preferences', {})
         if not isinstance(saved, dict):
             saved = {}
-        formats = {'md':'Markdown', 'txt':'TXT 纯文本', 'srt':'SRT 字幕'}
-        contents = {'source':'原文', 'translation':'译文', 'both':'对照'}
+        formats = {'md': 'Markdown', 'txt': 'TXT', 'srt': 'SRT'}
+        contents = {'both': '对照', 'source': '原文', 'translation': '译文'}
         selected_format = initial_format or saved.get('format', 'md')
+        selected_content = saved.get('content', 'both')
         label(b, title, small=True)
         row = tk.Frame(b, bg=UK.C.N0)
         row.pack(fill='x', pady=8)
-        scope = UK.Select(row, ['整场会议', '当前筛选结果'] if live else ['所选历史记录'],
-                          value='整场会议' if live else '所选历史记录', width=170, bg=UK.C.N0)
-        scope.pack(side='left')
-        fmt = UK.Select(row, ['Markdown', 'TXT 纯文本', 'SRT 字幕'],
-                        value=formats.get(selected_format, 'Markdown'), width=160, bg=UK.C.N0)
-        fmt.pack(side='left', padx=12)
-        content = UK.Select(row, ['原文', '译文', '对照'], value=contents.get(saved.get('content'), '对照'), width=150, bg=UK.C.N0)
-        content.pack(side='left')
+        pick = {'scope': '整场会议' if live else '所选历史记录',
+                'fmt': formats.get(selected_format, 'Markdown'),
+                'content': contents.get(selected_content, '对照')}
+        if live:
+            scope_seg = UK.Segmented(row, ['整场会议', '当前筛选'],
+                                     command=lambda v: pick.update(scope=v), bg=UK.C.N0)
+            scope_seg.pack(side='left', padx=(0, 12))
+            scope_seg.set(0)
+        fmt_opts = ['Markdown', 'TXT', 'SRT']
+        fmt_seg = UK.Segmented(row, fmt_opts,
+                               command=lambda v: pick.update(fmt=v), bg=UK.C.N0)
+        fmt_seg.pack(side='left', padx=(0, 12))
+        fmt_seg.set(fmt_opts.index(pick['fmt']) if pick['fmt'] in fmt_opts else 0)
+        cnt_opts = ['对照', '原文', '译文']
+        cnt_seg = UK.Segmented(row, cnt_opts,
+                               command=lambda v: pick.update(content=v), bg=UK.C.N0)
+        cnt_seg.pack(side='left')
+        cnt_seg.set(cnt_opts.index(pick['content']) if pick['content'] in cnt_opts else 0)
         choices = tk.Frame(b, bg=UK.C.N0)
         choices.pack(fill='x', pady=8)
         name = tk.BooleanVar(value=saved.get('names', True) if isinstance(saved.get('names', True), bool) else True)
@@ -78,18 +89,18 @@ def open_export(app, records=None, title=None, initial_format=None):
         state = {'signature': None, 'busy':False}
 
         def selected():
-            return current if live and scope.get() == '当前筛选结果' else frozen
+            return current if live and pick['scope'] == '当前筛选' else frozen
 
         def options():
-            return ME.ExportOptions({'Markdown':'md', 'TXT 纯文本':'txt', 'SRT 字幕':'srt'}[fmt.get()],
-                {'原文':'source', '译文':'translation', '对照':'both'}[content.get()],
+            return ME.ExportOptions({'Markdown':'md', 'TXT':'txt', 'SRT':'srt'}[pick['fmt']],
+                {'原文':'source', '译文':'translation', '对照':'both'}[pick['content']],
                 name.get(), stamp.get(), synthetic.get())
 
         def update():
             if not b.winfo_exists():
                 return
             recs, opt = selected(), options()
-            sig = (scope.get(), opt, ME.missing_translation(recs))
+            sig = (pick['scope'], opt, ME.missing_translation(recs))
             if sig != state['signature']:
                 state['signature'] = sig
                 missing = ME.missing_translation(recs)
@@ -582,15 +593,16 @@ def view_history(app, session, records):
         readout.pack(side='right')
 
         # ---------------- 正文 ----------------
-        # 外框用卡片，正文 Text 在卡片里，和实时会议的层次一致
-        holder = UK.Card(b, radius=UK.R_CARD, padding=14, bg=UK.C.N0)
+        # 顶层已是卡片，正文区直接用 1px 分隔线承接，避免卡片套卡片。
+        tk.Frame(b, bg=UK.C.LINE, height=1).pack(fill='x', pady=(4, 10))
+        holder = tk.Frame(b, bg=UK.C.N0)
         holder.pack(fill='both', expand=True)
-        txt = tk.Text(holder.body, wrap='word', bg=UK.C.N0, fg=UK.C.TEXT,
+        txt = tk.Text(holder, wrap='word', bg=UK.C.N0, fg=UK.C.TEXT,
                       font=UK.F_BODY, bd=0, highlightthickness=0,
                       padx=6, pady=0, spacing1=2, spacing3=6,
                       selectbackground=UK.C.A100, selectforeground=UK.C.TEXT,
                       insertbackground=UK.C.TEXT, undo=False)
-        scroll = UK.ThinScroll(holder.body, txt, bg=UK.C.N0)
+        scroll = UK.ThinScroll(holder, txt, bg=UK.C.N0)
         scroll.pack(side='right', fill='y', padx=(6, 0))
         txt.pack(side='left', fill='both', expand=True)
         TV.configure_tags(txt, reading_size=app.reading_size,
@@ -940,23 +952,76 @@ def edit_record(app, session, rec, state):
 
 
 def open_reading(app):
+    import transcript_view as TV
+    from datetime import datetime
+
     def build(parent):
-        b=card(parent)
-        label(b,'字号',small=True)
-        size=UK.Select(b,['11','12','14','16','18'],value=str(app.reading_size),width=160,bg=UK.C.N0)
-        size.pack(anchor='w',pady=12)
-        label(b,'间距',small=True)
-        density=UK.Select(b,['舒适间距','紧凑间距'],value='舒适间距' if app.density=='comfort' else '紧凑间距',width=160,bg=UK.C.N0)
-        density.pack(anchor='w',pady=12)
+        box = UK.Card(parent, padding=20, autosize=True)
+        box.pack(fill='x')
+        b = box.body
+        chosen = {'size': int(getattr(app, 'reading_size', 12) or 12),
+                  'density': getattr(app, 'density', 'comfort') or 'comfort'}
+        sizes = ['11', '12', '14', '16', '18']
+        densities = ['舒适', '紧凑']
+
+        row = tk.Frame(b, bg=UK.C.N0)
+        row.pack(fill='x', pady=(0, 14))
+        tk.Label(row, text='字号', bg=UK.C.N0, fg=UK.C.SUB, font=UK.F_SMALL).pack(side='left', padx=(0, 10))
+        seg_size = UK.Segmented(row, sizes, command=lambda v: on_change(size=int(v)), bg=UK.C.N0)
+        seg_size.pack(side='left', padx=(0, 24))
+        seg_size.set(sizes.index(str(chosen['size'])) if str(chosen['size']) in sizes else 1)
+
+        tk.Label(row, text='间距', bg=UK.C.N0, fg=UK.C.SUB, font=UK.F_SMALL).pack(side='left', padx=(0, 10))
+        seg_den = UK.Segmented(row, densities,
+                               command=lambda v: on_change(density='comfort' if v == '舒适' else 'compact'),
+                               bg=UK.C.N0)
+        seg_den.pack(side='left')
+        seg_den.set(0 if chosen['density'] == 'comfort' else 1)
+
+        tk.Frame(b, bg=UK.C.LINE, height=1).pack(fill='x', pady=(2, 12))
+        sample = tk.Text(b, height=10, wrap='word', bg=UK.C.N0, fg=UK.C.TEXT,
+                         bd=0, highlightthickness=0, padx=4, pady=0, spacing1=2, spacing3=6)
+        sample.pack(fill='x')
+        demo = [
+            dict(name='Jeremy Wang', raw='Jeremy Wang',
+                 text='Can we review the headliner section data today?',
+                 tr='我们今天能评审一下顶棚断面数据吗？', tr_status='ok',
+                 ts=datetime(2026, 11, 20, 10, 0, 5)),
+            dict(name='Jeni Mathan', raw='Jeni Mathan',
+                 text='Yes, let us check the B-pillar clearance next.',
+                 tr='好的，接下来我们看下 B 柱间隙。', tr_status='ok',
+                 ts=datetime(2026, 11, 20, 10, 0, 18)),
+        ]
+
+        def render_sample():
+            TV.configure_tags(sample, reading_size=chosen['size'], density=chosen['density'])
+            sample.configure(state='normal')
+            sample.delete('1.0', 'end')
+            for i, rec in enumerate(demo):
+                TV.render_block(sample, i, rec, app, 'both', retry=False)
+            sample.configure(state='disabled')
+            box.fit()
+
+        def on_change(size=None, density=None):
+            if size is not None:
+                chosen['size'] = size
+            if density is not None:
+                chosen['density'] = density
+            render_sample()
+
+        render_sample()
+
         def apply():
-            import transcript_view as TV
-            app.reading_size=int(size.get());app.density='comfort' if density.get()=='舒适间距' else 'compact'
-            TV.configure_tags(app.txt, reading_size=app.reading_size,
-                              density=app.density)
-            app.tcfg.reading_size=app.reading_size;app.tcfg.reading_density=app.density;app.tcfg.save()
+            app.reading_size = chosen['size']
+            app.density = chosen['density']
+            TV.configure_tags(app.txt, reading_size=app.reading_size, density=app.density)
+            app.tcfg.reading_size = app.reading_size
+            app.tcfg.reading_density = app.density
+            app.tcfg.save()
             if app.float_bar is not None:
                 app.float_bar.repaint()
             app._close_sheet()
-        app._sheet_footer.pack(side='bottom',fill='x',padx=24,pady=(8,12))
-        UK.Pill(app._sheet_footer,'应用',apply,kind='primary').pack(side='right')
-    app._show_sheet('阅读偏好',build)
+
+        app._sheet_footer.pack(side='bottom', fill='x', padx=24, pady=(8, 12))
+        UK.Pill(app._sheet_footer, '应用', apply, kind='primary').pack(side='right')
+    app._show_sheet('阅读偏好', build)

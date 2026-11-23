@@ -358,4 +358,49 @@ class SpeakerNameTests(unittest.TestCase):
         self.assertTrue(reader4.is_name("03-Guest"))
         self.assertTrue(reader4.is_name("AN Chao_LD Interior"))
 
+    def test_feishu_nested_pane_and_renamed_classes(self):
+        """飞书历史面板：即使外层多套一层滚动 Pane 且类名改名，也能准确识别说话人与 EditControl 字幕，过滤头像/设备噪声按钮。"""
+        import queue
+        import teamsub as T
+
+        class FakeNode:
+            def __init__(self, ct, cls="", name="", children=()):
+                self.ControlTypeName = ct
+                self.ClassName = cls
+                self.Name = name
+                self._children = list(children)
+
+            def GetChildren(self):
+                return list(self._children)
+
+            def GetLastChildControl(self):
+                return self._children[-1] if self._children else None
+
+            def GetPreviousSiblingControl(self):
+                return None
+
+        scroll_pane = FakeNode("PaneControl", "ScrollContent", "", [
+            FakeNode("EditControl", "TextBox", "半截残句"),
+            FakeNode("ButtonControl", "AvatarBtn", ""),
+            FakeNode("ButtonControl", "SpeakerBtn", "房立勇"),
+            FakeNode("EditControl", "TextBox", "我们上周四开跨部门会也说了。"),
+            FakeNode("ButtonControl", "AvatarBtn", "Rich Label"),
+            FakeNode("ButtonControl", "SpeakerBtn", "杨艳"),
+            FakeNode("ButtonControl", "DeviceBadge", "用 陈东浩 的设备"),
+            FakeNode("EditControl", "TextBox", "刚才等一下要说到的。"),
+        ])
+        outer_panel = FakeNode("PaneControl", "BilingualSubtitleHistoryPanelView", "", [
+            FakeNode("EditControl", "SearchInput", ""),
+            FakeNode("ButtonControl", "FilterBtn", "按参会人筛选"),
+            scroll_pane,
+        ])
+        reader = T.CaptionReader(queue.Queue(), mode="feishu")
+        reader.group = outer_panel
+        pairs = reader.read_feishu()
+        self.assertEqual(pairs, [
+            ("房立勇", "房立勇", "我们上周四开跨部门会也说了。"),
+            ("杨艳", "杨艳", "刚才等一下要说到的。"),
+        ])
+
+
 

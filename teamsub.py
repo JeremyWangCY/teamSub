@@ -85,7 +85,7 @@ RESOURCE_DIR = _resource_dir()  # 只读资源（随 exe 打包）
 # 常量放在模块顶层（而不是 pyproject/打包元数据里），是为了让源码运行、
 # 冻结成 exe 两种方式读到的都是同一个值。
 APP_DISPLAY_NAME = "TeamSub"
-APP_VERSION = "0.2.14"
+APP_VERSION = "0.2.15"
 
 CAPTION_DIR = Path(os.environ.get("TEAMSUB_DATA_DIR", APP_DIR)) / "captions"
 
@@ -467,6 +467,59 @@ def _is_caption_label(ct: str, cls: str) -> bool:
     return ct in ("TextControl", "EditControl") and cls.endswith("RichLabel")
 
 
+_FEISHU_NOISE_BTNS = {
+    "rich label", "按参会人筛选", "查看实时字幕", "ai 同传", "翻译",
+    "更多", "关闭字幕", "字幕", "搜索", "清空", "收起", "展开",
+}
+_FEISHU_DEVICE_RE = re.compile(r"^用\s*.+\s*的设备$")
+_FEISHU_TIME_RE = re.compile(r"^\d{1,2}:\d{2}(?::\d{2})?$")
+_FEISHU_NOISE_TEXTS = {"字幕", "搜索", "机器识别仅供参考"}
+
+
+def _feishu_control_text(ctrl) -> str:
+    """读取飞书 UIA 节点文本：优先 Name，空时兜底 ValuePattern。"""
+    try:
+        t = clean(ctrl.Name)
+        if t:
+            return t
+    except Exception:
+        pass
+    try:
+        vp = ctrl.GetValuePattern()
+        if vp is not None:
+            return clean(vp.Value)
+    except Exception:
+        pass
+    return ""
+
+
+def _is_feishu_speaker_btn(ct: str, cls: str, name: str, *, strict: bool = True) -> bool:
+    if ct != "ButtonControl" or not name:
+        return False
+    if cls == "IronNameButton":
+        return True
+    if strict:
+        return False
+    low = name.lower()
+    if low in _FEISHU_NOISE_BTNS or _FEISHU_DEVICE_RE.match(name) or _FEISHU_TIME_RE.match(name):
+        return False
+    return ("Name" in cls) or len(name) <= 40
+
+
+def _is_feishu_caption_node(ct: str, cls: str, text: str, *, strict: bool = True) -> bool:
+    if not text:
+        return False
+    if _is_caption_label(ct, cls):
+        return True
+    if strict:
+        return False
+    if ct not in ("EditControl", "TextControl"):
+        return False
+    if text in _FEISHU_NOISE_TEXTS or _FEISHU_TIME_RE.match(text):
+        return False
+    return True
+
+
 _FEISHU_EXE = ("feishu", "lark")     # 进程映像名关键字（国内版 / 国际版）
 _FEISHU_HINT = {"hwnd": 0, "ctrl": None, "win": None}   # 上次命中的容器
 
@@ -802,26 +855,87 @@ class CaptionReader(threading.Thread):
                     nm = name or last or "未知发言人"
                     last = name or last
                     pairs.append((simplify_name(nm), nm, text))
-        else:   # BilingualSubtitleHistoryPanelView：扁平序列
-            # last 用 None 起步：尾部窗口可能从某条字幕的正文中间切入，此时
-            # 说话人按钮在窗口之外。若把这种条目当成「未知发言人」收下，它会
-            # 因为说话人不同而无法与上轮的记录对齐，于是同一句被重复入库。
-            # 宁可丢掉这条已被记录过的残句，也不要污染记录。
-            last = None
-            for ch in nodes:
+        else:   # BilingualSubtitleHistoryPanelView：扁平序列（兼容嵌套滚动容器与新类名）
+            flat = self._flatten_feishu_history_nodes(nodes)
+            pairs = self._parse_feishu_history_nodes(flat, strict=True)
+            if not pairs and flat:
+                # 飞书客户端更新类名时，退回基于控件角色与结构的提取
+                pairs = self._parse_feishu_history_nodes(flat, strict=False)
+        return pairs
+
+    @classmethod
+    def _flatten_feishu_history_nodes(cls, nodes):
+        """若历史面板直接子节点只是外层包装 Pane（如搜索栏 + 滚动内容 Pane），
+        自动下探到承载字幕条目的子容器，避免读出空列表。"""
+        out = []
+        containers = []
+        for ch in nodes:
+            try:
+                ct = ch.ControlTypeName
+            except Exception:
+                continue
+            if ct in ("ButtonControl", "EditControl", "TextControl"):
+                out.append(ch)
+            elif ct in ("PaneControl", "ListControl", "GroupControl", "CustomControl", "ListItemControl"):
+                containers.append(ch)
+        if out and len(out) >= 3:
+            return out
+        # 没有足够的直属叶节点：下探子容器（优先取子节点最多的滚动列表容器）
+        expanded = []
+        for box in containers:
+            try:
+                sub = cls._sibling_tail(box, cls.FEISHU_TAIL * 2)
+                if len(sub) < 2:
+                    sub = box.GetChildren()
+            except Exception:
+                sub = []
+            if not sub:
+                continue
+            leaves = []
+            nested = []
+            for s in sub:
                 try:
-                    cls, ct = ch.ClassName or "", ch.ControlTypeName
-                    if ct == "ButtonControl" and cls == "IronNameButton":
-                        nm = clean(ch.Name)
-                        if nm:
-                            last = nm        # 空名字按钮（内容重绘）不能覆盖说话人
-                        continue
-                    if _is_caption_label(ct, cls):
-                        text = clean(ch.Name)
-                        if text and last:
-                            pairs.append((simplify_name(last), last, text))
+                    sct = s.ControlTypeName
                 except Exception:
                     continue
+                if sct in ("ButtonControl", "EditControl", "TextControl"):
+                    leaves.append(s)
+                elif sct in ("PaneControl", "ListControl", "GroupControl", "CustomControl", "ListItemControl"):
+                    nested.append(s)
+            if leaves:
+                expanded.extend(leaves)
+            elif nested:
+                for nbox in nested[-cls.FEISHU_TAIL:]:
+                    try:
+                        for leaf in nbox.GetChildren():
+                            if leaf.ControlTypeName in ("ButtonControl", "EditControl", "TextControl"):
+                                expanded.append(leaf)
+                    except Exception:
+                        continue
+        return expanded or out
+
+    @staticmethod
+    def _parse_feishu_history_nodes(nodes, *, strict: bool = True):
+        """从历史面板扁平叶节点序列提取 (规范名, 原名, 文本)。"""
+        pairs = []
+        # last 用 None 起步：尾部窗口可能从某条字幕的正文中间切入，此时
+        # 说话人按钮在窗口之外；同时也天然跳过顶部搜索输入框。
+        last = None
+        for ch in nodes:
+            try:
+                cls = ch.ClassName or ""
+                ct = ch.ControlTypeName
+            except Exception:
+                continue
+            if ct == "ButtonControl":
+                nm = _feishu_control_text(ch)
+                if _is_feishu_speaker_btn(ct, cls, nm, strict=strict):
+                    last = nm
+                continue
+            if ct in ("EditControl", "TextControl"):
+                text = _feishu_control_text(ch)
+                if last and _is_feishu_caption_node(ct, cls, text, strict=strict):
+                    pairs.append((simplify_name(last), last, text))
         return pairs
 
     # 每轮只读尾部这么多子节点：约 8 条字幕，足够覆盖一轮内 1～2 条新增
@@ -867,14 +981,13 @@ class CaptionReader(threading.Thread):
         return nodes
 
     def _feishu_entry(self, item):
-        """条目 → (name, text)：第一个非空 IronNameButton + 字幕文本。
+        """条目 → (name, text)：第一个非空发言人按钮 + 字幕文本。
 
-        名字按钮可能在 SubtitleNameView 内或条目直属（飞书两种排布都有），
-        所以取条目内「第一个名字非空」的 IronNameButton；文本在
-        ScrollView → ContentItem → RichLabel，类名可能是 RichLabel 或
-        *RichLabel（见 _is_caption_label）。BFS 探查并限制深度防走全树。
+        先按已知类名（IronNameButton / *RichLabel）精确匹配；若客户端升级改名，
+        退回基于控件角色的结构提取，避免整条字幕丢失。
         """
         name, text = "", ""
+        fb_name, fb_text = "", ""
         queue_, seen = [item], 0
         while queue_ and seen < 60:
             node = queue_.pop(0)
@@ -887,16 +1000,20 @@ class CaptionReader(threading.Thread):
                 try:
                     cls = ch.ClassName or ""
                     ct = ch.ControlTypeName
-                    if not name and ct == "ButtonControl" \
-                            and cls == "IronNameButton":
-                        name = clean(ch.Name)
-                    elif not text and _is_caption_label(ct, cls):
-                        text = clean(ch.Name)
+                    val = _feishu_control_text(ch)
+                    if not name and _is_feishu_speaker_btn(ct, cls, val, strict=True):
+                        name = val
+                    elif not text and _is_feishu_caption_node(ct, cls, val, strict=True):
+                        text = val
+                    elif not fb_name and _is_feishu_speaker_btn(ct, cls, val, strict=False):
+                        fb_name = val
+                    elif not fb_text and _is_feishu_caption_node(ct, cls, val, strict=False):
+                        fb_text = val
                 except Exception:
                     continue
                 if not name or not text:
                     queue_.append(ch)
-        return name, text
+        return name or fb_name, text or fb_text
 
     def to_pairs(self, nodes):
         raw_items = _strip_ui_banner(nodes)
@@ -1819,6 +1936,8 @@ class App:
         self.lbl_stat.configure(text="")
         if hasattr(self, "mode_sw"):
             self.mode_sw.set(key)
+        if not self.records:
+            self.show_placeholder()
         self.flash(f"已切换到{m['name']}模式")
 
     def on_mode_blocked(self, key):

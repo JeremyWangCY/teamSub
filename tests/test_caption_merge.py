@@ -390,9 +390,16 @@ class SpeakerNameTests(unittest.TestCase):
             FakeNode("EditControl", "TextBox", "刚才等一下要说到的。"),
         ])
         outer_panel = FakeNode("PaneControl", "BilingualSubtitleHistoryPanelView", "", [
-            FakeNode("EditControl", "SearchInput", ""),
-            FakeNode("ButtonControl", "FilterBtn", "按参会人筛选"),
-            scroll_pane,
+            FakeNode("ButtonControl", "HdrBtn", "查看实时字幕"),
+            FakeNode("ButtonControl", "HdrBtn", "AI 同传"),
+            FakeNode("ButtonControl", "HdrBtn", "翻译"),
+            FakeNode("ButtonControl", "HdrBtn", "更多"),
+            FakeNode("ButtonControl", "HdrBtn", "关闭字幕"),
+            FakeNode("PaneControl", "BodyWrap", "", [
+                FakeNode("EditControl", "SearchInput", ""),
+                FakeNode("ButtonControl", "FilterBtn", "按参会人筛选"),
+                FakeNode("PaneControl", "ScrollViewport", "", [scroll_pane]),
+            ]),
         ])
         reader = T.CaptionReader(queue.Queue(), mode="feishu")
         reader.group = outer_panel

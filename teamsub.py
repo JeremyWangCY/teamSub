@@ -85,7 +85,7 @@ RESOURCE_DIR = _resource_dir()  # 只读资源（随 exe 打包）
 # 常量放在模块顶层（而不是 pyproject/打包元数据里），是为了让源码运行、
 # 冻结成 exe 两种方式读到的都是同一个值。
 APP_DISPLAY_NAME = "TeamSub"
-APP_VERSION = "0.2.15"
+APP_VERSION = "0.2.16"
 
 CAPTION_DIR = Path(os.environ.get("TEAMSUB_DATA_DIR", APP_DIR)) / "captions"
 
@@ -603,6 +603,7 @@ def _find_feishu():
 
         # 每个候选的超时要短：飞书会同时开多个 Chromium 窗口，超时定长了
         # 冷启动光「等待不存在的节点」就要好几秒。
+        empty_rt = None
         for w in cands:
             try:
                 rt = w.PaneControl(ClassName="BilingualSubtitleRealtimeWindowBase",
@@ -612,8 +613,17 @@ def _find_feishu():
                 lv = rt.PaneControl(ClassName="BilingualSubtitleRealtimeListView",
                                     searchDepth=8)
                 if lv.Exists(0.4, 0.15):
-                    _FEISHU_HINT.update(hwnd=w.NativeWindowHandle, ctrl=lv, win=w)
-                    return lv, w, "飞书会议"
+                    # 只有独立字幕窗里确实有内容时才优先返回；若用户切到右侧字幕面板，
+                    # 隐藏的独立字幕窗可能仍留在 UIA 树里但没有条目，不能挡住历史面板。
+                    try:
+                        has_items = lv.GetLastChildControl() is not None
+                    except Exception:
+                        has_items = False
+                    if has_items:
+                        _FEISHU_HINT.update(hwnd=w.NativeWindowHandle, ctrl=lv, win=w)
+                        return lv, w, "飞书会议"
+                    if empty_rt is None:
+                        empty_rt = (lv, w)
             except Exception:
                 continue
         for w in cands:
@@ -625,6 +635,22 @@ def _find_feishu():
                     return panel, w, "飞书会议"
             except Exception:
                 continue
+        # 兜底：若飞书改了 BilingualSubtitleHistoryPanelView 类名，通过右侧字幕面板特有的
+        # 「按参会人筛选」按钮定位其父容器。
+        for w in cands:
+            try:
+                flt = w.ButtonControl(Name="按参会人筛选", searchDepth=18)
+                if flt.Exists(0.35, 0.15):
+                    parent = flt.GetParentControl()
+                    if parent is not None:
+                        _FEISHU_HINT.update(hwnd=w.NativeWindowHandle, ctrl=parent, win=w)
+                        return parent, w, "飞书会议"
+            except Exception:
+                continue
+        if empty_rt is not None:
+            lv, w = empty_rt
+            _FEISHU_HINT.update(hwnd=w.NativeWindowHandle, ctrl=lv, win=w)
+            return lv, w, "飞书会议"
     except Exception:
         pass
     return None, None, ""
@@ -855,20 +881,28 @@ class CaptionReader(threading.Thread):
                     nm = name or last or "未知发言人"
                     last = name or last
                     pairs.append((simplify_name(nm), nm, text))
-        else:   # BilingualSubtitleHistoryPanelView：扁平序列（兼容嵌套滚动容器与新类名）
-            flat = self._flatten_feishu_history_nodes(nodes)
-            pairs = self._parse_feishu_history_nodes(flat, strict=True)
-            if not pairs and flat:
-                # 飞书客户端更新类名时，退回基于控件角色与结构的提取
-                pairs = self._parse_feishu_history_nodes(flat, strict=False)
+            if pairs:
+                return pairs
+        # BilingualSubtitleHistoryPanelView（以及 RealtimeListView 类名变更兜底）：
+        # 递归展开嵌套滚动容器，先严格按类名匹配，无结果时自动退回结构提取。
+        flat = self._flatten_feishu_history_nodes(nodes)
+        pairs = self._parse_feishu_history_nodes(flat, strict=True)
+        if not pairs and flat:
+            pairs = self._parse_feishu_history_nodes(flat, strict=False)
         return pairs
 
     @classmethod
-    def _flatten_feishu_history_nodes(cls, nodes):
-        """若历史面板直接子节点只是外层包装 Pane（如搜索栏 + 滚动内容 Pane），
-        自动下探到承载字幕条目的子容器，避免读出空列表。"""
+    def _flatten_feishu_history_nodes(cls, nodes, _depth: int = 0):
+        """递归展开飞书字幕面板内的嵌套容器（Pane/List/Group/Custom/ListItem），
+        按文档顺序收集所有叶级 Button/Edit/Text 节点。
+
+        对大容器只取尾部 FEISHU_TAIL * 2 个子节点，兼顾嵌套深度与轮询耗时；
+        绝不因顶部工具栏有若干 Button 而提前放弃下探内容 Pane。
+        """
+        if _depth > 6:
+            return []
         out = []
-        containers = []
+        limit = cls.FEISHU_TAIL * 2
         for ch in nodes:
             try:
                 ct = ch.ControlTypeName
@@ -876,43 +910,57 @@ class CaptionReader(threading.Thread):
                 continue
             if ct in ("ButtonControl", "EditControl", "TextControl"):
                 out.append(ch)
-            elif ct in ("PaneControl", "ListControl", "GroupControl", "CustomControl", "ListItemControl"):
-                containers.append(ch)
-        if out and len(out) >= 3:
-            return out
-        # 没有足够的直属叶节点：下探子容器（优先取子节点最多的滚动列表容器）
-        expanded = []
-        for box in containers:
-            try:
-                sub = cls._sibling_tail(box, cls.FEISHU_TAIL * 2)
-                if len(sub) < 2:
-                    sub = box.GetChildren()
-            except Exception:
-                sub = []
-            if not sub:
-                continue
-            leaves = []
-            nested = []
-            for s in sub:
+            elif ct in ("PaneControl", "ListControl", "GroupControl",
+                        "CustomControl", "ListItemControl", "DocumentControl"):
                 try:
-                    sct = s.ControlTypeName
+                    sub = cls._sibling_tail(ch, limit)
+                    if len(sub) < 2:
+                        sub = ch.GetChildren()
+                        if len(sub) > limit:
+                            sub = sub[-limit:]
                 except Exception:
-                    continue
-                if sct in ("ButtonControl", "EditControl", "TextControl"):
-                    leaves.append(s)
-                elif sct in ("PaneControl", "ListControl", "GroupControl", "CustomControl", "ListItemControl"):
-                    nested.append(s)
-            if leaves:
-                expanded.extend(leaves)
-            elif nested:
-                for nbox in nested[-cls.FEISHU_TAIL:]:
+                    sub = []
+                if sub:
+                    out.extend(cls._flatten_feishu_history_nodes(sub, _depth + 1))
+        return out
+
+    def _dump_feishu_diag(self):
+        """飞书连续空读时写一次轻量 UIA 诊断快照，便于秒级定位客户端改版。"""
+        if getattr(self, "_feishu_diag_dumped", False):
+            return
+        self._feishu_diag_dumped = True
+        try:
+            lines = []
+            grp = self.group
+            if grp is None:
+                lines.append("group=None")
+            else:
+                lines.append(f"group: ct={grp.ControlTypeName} cls={grp.ClassName!r} name={grp.Name!r}")
+                def walk(node, d=1):
+                    if d > 5 or len(lines) >= 80:
+                        return
                     try:
-                        for leaf in nbox.GetChildren():
-                            if leaf.ControlTypeName in ("ButtonControl", "EditControl", "TextControl"):
-                                expanded.append(leaf)
-                    except Exception:
-                        continue
-        return expanded or out
+                        kids = self._sibling_tail(node, 16)
+                        if len(kids) < 2:
+                            kids = node.GetChildren()[:16]
+                    except Exception as exc:
+                        lines.append("  " * d + f"<err {exc}>")
+                        return
+                    for c in kids:
+                        if len(lines) >= 80:
+                            break
+                        try:
+                            lines.append(
+                                "  " * d + f"{c.ControlTypeName} cls={c.ClassName!r} "
+                                f"name={(c.Name or '')[:60]!r}"
+                            )
+                            walk(c, d + 1)
+                        except Exception:
+                            continue
+                walk(grp, 1)
+            (data_dir() / "feishu_diag.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        except Exception:
+            pass
 
     @staticmethod
     def _parse_feishu_history_nodes(nodes, *, strict: bool = True):
@@ -1248,7 +1296,9 @@ class CaptionReader(threading.Thread):
                     if not cur:
                         self.empty_streak += 1
                         if self.empty_streak >= 5:
-                            self.group = None      # 会议结束/面板重绘 -> 重新发现
+                            self._dump_feishu_diag()
+                            _FEISHU_HINT["ctrl"] = None  # 清掉空容器缓存，允许切换到历史面板
+                            self.group = None            # 会议结束/面板重绘 -> 重新发现
                             self.empty_streak = 0
                         self._emit(("status", "idle", ""))
                     else:

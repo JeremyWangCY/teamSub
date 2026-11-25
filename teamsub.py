@@ -85,7 +85,7 @@ RESOURCE_DIR = _resource_dir()  # 只读资源（随 exe 打包）
 # 常量放在模块顶层（而不是 pyproject/打包元数据里），是为了让源码运行、
 # 冻结成 exe 两种方式读到的都是同一个值。
 APP_DISPLAY_NAME = "TeamSub"
-APP_VERSION = "0.2.16"
+APP_VERSION = "0.3.0"
 
 CAPTION_DIR = Path(os.environ.get("TEAMSUB_DATA_DIR", APP_DIR)) / "captions"
 
@@ -3273,27 +3273,66 @@ class App:
             raise RuntimeError(f'当前会议仍有内容未能保存，已保留：{exc}')
         self._do_clear()           # 内部会 close 掉 save_store 并清空会话
 
+    def _hide_archive_bar(self):
+        bar = getattr(self, 'archive_bar', None)
+        if bar is not None and bar.winfo_exists():
+            bar.pack_forget()
+
+    def _show_archive_bar(self, title, records):
+        bar = getattr(self, 'archive_bar', None)
+        if bar is None or not bar.winfo_exists():
+            return
+        for w in bar.winfo_children():
+            w.destroy()
+        count = len(records)
+        tk.Label(bar, text=f'✓ 已归档「{title}」并清屏（{count} 条已保存至历史）',
+                 bg=UK.C.N0, fg=UK.C.TEXT, font=UK.F_SMALL, anchor='w').pack(side='left')
+        UK.Pill(bar, '', self._hide_archive_bar, kind='ghost', icon='close', icon_size=12,
+                bg=UK.C.N0, height=28, padx=6, tooltip='关闭提示').pack(side='right', padx=(6, 0))
+        if records:
+            def export_archived():
+                import frontend_views as FV
+                self._hide_archive_bar()
+                FV.open_export(self, records=records, title=title)
+            UK.Pill(bar, '导出刚才那场', export_archived, kind='primary',
+                    bg=UK.C.N0, height=28, padx=10, font=UK.F_MINI).pack(side='right', padx=(6, 0))
+        UK.Pill(bar, '查看历史', lambda: (self._hide_archive_bar(), self.open_history()),
+                kind='secondary', bg=UK.C.N0, height=28, padx=10, font=UK.F_MINI).pack(side='right')
+        bar.pack(side='bottom', fill='x', padx=20, pady=(6, 0))
+
     def new_meeting(self):
         def start():
+            self._hide_archive_bar()
             self._do_clear()
             self.paused = self.reader.paused = False
             if hasattr(self, 'btn_pause'):
                 self.btn_pause.set_text('暂停')
+            import frontend_shell as FS
+            FS.refresh_recent(self)
             self.flash('已新建独立会议记录')
         self._confirm('归档当前记录并开始新会议？同名会议也会分别保存。', lambda: self._flush_before_switch(start), '新建会议', push=False)
 
     def end_meeting(self):
         def end():
+            archived_title = (self.reader.meeting_title
+                              or self._meeting_txt.replace('会议：', '').replace('续接：', '').strip()
+                              or '会议记录')
+            archived_records = copy.deepcopy(self.records)
+            self._do_clear()
             self.paused = self.reader.paused = True
             if hasattr(self, 'btn_pause'):
                 self.btn_pause.set_text('继续')
-            self.status.set('已归档 · 暂停采集', UK.C.SUB)
-            store = self.save_store
-            if store and hasattr(store, 'flush'):
-                self.background(lambda: store.flush(), lambda _: self.flash('会议已保存，可导出或新建下一场'))
-            else:
-                self.flash('会议已保存，可导出或新建下一场')
-        self._confirm('结束本次采集并保存会议？仍可导出整场内容。', end, '结束并归档', push=False)
+            self._meeting_txt = '待机中'
+            if hasattr(self, 'lbl_meeting'):
+                self.lbl_meeting.configure(text=self._meeting_txt)
+            self.status.set('已归档 · 待机', UK.C.SUB)
+            if archived_records:
+                self._show_archive_bar(archived_title, archived_records)
+            import frontend_shell as FS
+            FS.refresh_recent(self)
+            self.flash(f'已归档「{archived_title}」并清屏')
+        self._confirm('结束本次会议并归档清屏？记录已自动保存至历史，随时可查看或导出。',
+                      lambda: self._flush_before_switch(end), '结束并归档', push=False)
 
     def resume_meeting(self, session, confirm=True):
         from meeting_translation import active_job

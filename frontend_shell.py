@@ -73,40 +73,125 @@ NAV = [("实时会议", "live", "show_live", "Ctrl+1"),
 
 
 def build_nav(self, parent):
-    """左侧导航：品牌标 + 目的地 + 帮助/版本。"""
+    """方案 C 融合侧栏：品牌 + 会议源切换 + 主导航 + 最近会议快速列表 + 帮助/版本。"""
     from PIL import ImageTk
     import brand
-    nav = tk.Frame(parent, bg=UK.C.N100, width=176)
+    nav = tk.Frame(parent, bg=UK.C.N100, width=204)
     nav.pack(side="left", fill="y")
     nav.pack_propagate(False)
+    # 右侧 1px 细分隔线
+    tk.Frame(parent, bg=UK.C.LINE, width=1).pack(side="left", fill="y")
+
     head = tk.Frame(nav, bg=UK.C.N100)
-    head.pack(fill="x", padx=18, pady=(22, 22))
-    self._brand_img = ImageTk.PhotoImage(brand.render(UK.px(28)), master=nav)
+    head.pack(fill="x", padx=14, pady=(16, 10))
+    self._brand_img = ImageTk.PhotoImage(brand.render(UK.px(24)), master=nav)
     tk.Label(head, image=self._brand_img, bg=UK.C.N100).pack(side="left")
     tk.Label(head, text="TeamSub", font=UK.F_HEAD, bg=UK.C.N100,
-             fg=UK.C.TEXT).pack(side="left", padx=(10, 0))
-    self.nav_buttons = {}
-    font = (UK.FAMILY, 11)
-    for label, icon, action, key in NAV:
-        btn = UK.Pill(nav, label, getattr(self, action),
-                      kind="selected" if label == "实时会议" else "ghost",
-                      height=40, padx=12, bg=UK.C.N100, font=font, align="left",
-                      icon=icon, icon_size=18, tooltip=key)
-        btn.pack(fill="x", padx=10, pady=2)
-        self.nav_buttons[label] = btn
+             fg=UK.C.TEXT).pack(side="left", padx=(8, 0))
     try:
         from teamsub import APP_VERSION
     except ImportError:
         APP_VERSION = ""
-    tk.Label(nav, text=f"v{APP_VERSION}" if APP_VERSION else "", font=UK.F_MINI,
-             bg=UK.C.N100, fg=UK.C.T3, anchor="w").pack(side="bottom", fill="x",
-                                                        padx=24, pady=(0, 16))
-    help_btn = UK.Pill(nav, "帮助", self.show_help, kind="ghost", height=40, padx=12,
-                       bg=UK.C.N100, font=font, align="left", icon="help", icon_size=18,
+    if APP_VERSION:
+        tk.Label(head, text=f"v{APP_VERSION}", font=UK.F_MINI,
+                 bg=UK.C.N100, fg=UK.C.T3).pack(side="right")
+
+    # 会议源切换直接置顶侧栏，释放右侧顶栏空间
+    src_row = tk.Frame(nav, bg=UK.C.N100)
+    src_row.pack(fill="x", padx=12, pady=(0, 12))
+    self.mode_sw = UK.ModeSwitch(src_row, modes=MD.all_modes(), value=self.mode,
+                                 command=self.set_mode,
+                                 on_blocked=self.on_mode_blocked,
+                                 bg=UK.C.N100)
+    self.mode_sw.pack(anchor="w")
+
+    self.nav_buttons = {}
+    font = (UK.FAMILY, 10)
+    for label, icon, action, key in NAV:
+        btn = UK.Pill(nav, label, getattr(self, action),
+                      kind="selected" if label == "实时会议" else "ghost",
+                      height=36, padx=10, bg=UK.C.N100, font=font, align="left",
+                      icon=icon, icon_size=16, tooltip=key)
+        btn.pack(fill="x", padx=10, pady=2)
+        self.nav_buttons[label] = btn
+
+    # 底部帮助入口先占位，中间留给「最近会议」快速切换区
+    help_btn = UK.Pill(nav, "帮助", self.show_help, kind="ghost", height=36, padx=10,
+                       bg=UK.C.N100, font=font, align="left", icon="help", icon_size=16,
                        tooltip="F1")
-    help_btn.pack(side="bottom", fill="x", padx=10, pady=(0, 6))
+    help_btn.pack(side="bottom", fill="x", padx=10, pady=(4, 12))
     self.nav_buttons["帮助"] = help_btn
+
+    tk.Frame(nav, bg=UK.C.LINE, height=1).pack(fill="x", padx=14, pady=(10, 8))
+    recent_head = tk.Frame(nav, bg=UK.C.N100)
+    recent_head.pack(fill="x", padx=14, pady=(0, 6))
+    tk.Label(recent_head, text="最近会议", font=UK.F_MINI,
+             bg=UK.C.N100, fg=UK.C.T3, anchor="w").pack(side="left")
+    self.recent_box = tk.Frame(nav, bg=UK.C.N100)
+    self.recent_box.pack(fill="both", expand=True, padx=10)
+    self.root.after(200, lambda: refresh_recent(self))
     return nav
+
+
+def refresh_recent(self):
+    """异步刷新左侧栏「最近会议」快捷列表（最多 6 场），不阻塞界面。"""
+    box = getattr(self, "recent_box", None)
+    if box is None or not box.winfo_exists():
+        return
+    try:
+        from teamsub import CAPTION_DIR
+        import meeting_repository as MR
+    except Exception:
+        return
+
+    def load():
+        sessions, _ = MR.list_sessions(CAPTION_DIR)
+        return sessions[:6]
+
+    def apply(sessions):
+        if not box.winfo_exists():
+            return
+        for w in box.winfo_children():
+            w.destroy()
+        if not sessions:
+            tk.Label(box, text="暂无历史记录", font=UK.F_MINI,
+                     bg=UK.C.N100, fg=UK.C.T3, anchor="w").pack(fill="x", padx=6, pady=4)
+            return
+        for s in sessions:
+            item = tk.Frame(box, bg=UK.C.N100, padx=8, pady=6, cursor="hand2")
+            item.pack(fill="x", pady=1)
+            title = UK.fit_text(s.title or "未命名会议", UK.F_MINI, 162)
+            # 简化日期为 MM-DD HH:MM · N 条
+            short_t = s.started_label[-11:] if len(s.started_label) >= 11 else s.started_label
+            meta = f"{short_t} · {s.count} 条"
+            l1 = tk.Label(item, text=title, font=UK.F_MINI, bg=UK.C.N100,
+                          fg=UK.C.TEXT, anchor="w", cursor="hand2")
+            l1.pack(fill="x")
+            l2 = tk.Label(item, text=meta, font=UK.F_TIME, bg=UK.C.N100,
+                          fg=UK.C.T3, anchor="w", cursor="hand2")
+            l2.pack(fill="x")
+
+            def _open(_e=None, session=s):
+                if getattr(self, "_sheet_open", False) and not self._allow_leave_sheet():
+                    return
+                import frontend_views as FV
+                self.background(
+                    lambda: MR.merge_sessions([session.path]),
+                    lambda recs: FV.view_history(self, session, recs),
+                )
+
+            def _hover(on, frame=item, a=l1, b=l2):
+                bg = UK.C.N150 if on else UK.C.N100
+                frame.configure(bg=bg)
+                a.configure(bg=bg)
+                b.configure(bg=bg)
+
+            for w in (item, l1, l2):
+                w.bind("<Button-1>", _open)
+                w.bind("<Enter>", lambda _e, fn=_hover: fn(True))
+                w.bind("<Leave>", lambda _e, fn=_hover: fn(False))
+
+    self.background(load, apply, lambda _e: None)
 
 
 def build(self):
@@ -130,34 +215,28 @@ def build(self):
     self.main_area.pack(side="left", fill="both", expand=True)
     r = self.live_page = tk.Frame(self.main_area, bg=UK.C.N50)
     r.pack(fill="both", expand=True)
-    # ---------- 顶栏 ----------
+    # ---------- 顶栏（单层精简：会议名 + 状态 ｜ 翻译开关 + 更多 + 导出） ----------
     head = tk.Frame(r, bg=UK.C.N50)
-    head.pack(fill="x", padx=24, pady=(18, 12))
+    head.pack(fill="x", padx=20, pady=(14, 10))
 
     lt = tk.Frame(head, bg=UK.C.N50)
     lt.pack(side="left")
-    # 会议模式切换 + 当前会议名，一行放下
-    self.mode_sw = UK.ModeSwitch(lt, modes=MD.all_modes(), value=self.mode,
-                                 command=self.set_mode,
-                                 on_blocked=self.on_mode_blocked,
-                                 bg=UK.C.N50)
-    self.mode_sw.pack(side="left")
     self.lbl_meeting = tk.Label(lt, text=self._meeting_txt, bg=UK.C.N50,
                                 fg=UK.C.TEXT, font=UK.F_HEAD)
-    self.lbl_meeting.pack(side="left", padx=(12, 0))
+    self.lbl_meeting.pack(side="left")
+    self.status = UK.StatusPill(lt, "连接中", bg=UK.C.N50)
+    self.status.pack(side="left", padx=(10, 0))
 
     rt = tk.Frame(head, bg=UK.C.N50)
     rt.pack(side="right")
-    self.status = UK.StatusPill(rt, "连接中", bg=UK.C.N50)
-    self.status.pack(side="left", padx=(0, 12))
-    self.btn_export = UK.Pill(rt, "导出整场会议", self.export, kind="primary", height=36,
+    self.btn_export = UK.Pill(rt, "导出整场会议", self.export, kind="primary", height=34,
                               icon="export", tooltip="Ctrl+E")
     self.btn_export.pack(side="right", padx=(8, 0))
-    self.btn_more = UK.Pill(rt, "", self._open_menu, kind="ghost", padx=10,
+    self.btn_more = UK.Pill(rt, "", self._open_menu, kind="ghost", height=34, padx=10,
                             icon="more", icon_size=18, tooltip="更多")
-    self.btn_more.pack(side="right", padx=(6, 0))
+    self.btn_more.pack(side="right", padx=(4, 0))
     tr_box = tk.Frame(rt, bg=UK.C.N50)
-    tr_box.pack(side="right", padx=(0, 4))
+    tr_box.pack(side="right", padx=(0, 6))
     self.lbl_tr = tk.Label(tr_box, text="翻译", bg=UK.C.N50,
                            fg=UK.C.TEXT if self.trans_on else UK.C.SUB,
                            font=UK.F_SMALL, cursor="hand2")
@@ -170,22 +249,22 @@ def build(self):
 
     # ---------- 检索 + 主题 + 翻译方向 ----------
     bar = tk.Frame(r, bg=UK.C.N50)
-    bar.pack(fill="x", padx=24, pady=(0, 12))
-    self.search = UK.SearchBox(bar, width=220, placeholder="搜索原文、译文或发言人",
+    bar.pack(fill="x", padx=20, pady=(0, 10))
+    self.search = UK.SearchBox(bar, width=204, placeholder="搜索字幕或发言人",
                                on_change=self.apply_search, bg=UK.C.N50)
     self.search.pack(side="left")
     self.seg = UK.DirectionPicker(bar, lang_names(), self.tcfg.mode, tcfg_pair(self.tcfg),
-                                  command=self.on_mode_pick, bg=UK.C.N50, select_w=88,
+                                  command=self.on_mode_pick, bg=UK.C.N50, select_w=84,
                                   **lang_hints())
     self.seg.pack(side="right")
 
     # 常驻上下文只读取已保存的配置，浏览设置草稿不会改变这里。
     topic_slot = tk.Frame(bar, bg=UK.C.N50)
-    topic_slot.pack(side="left", padx=(14, 12))
+    topic_slot.pack(side="left", padx=(12, 10))
     tk.Label(topic_slot, text="主题", font=UK.F_MINI, bg=UK.C.N50,
              fg=UK.C.SUB).pack(side="left", padx=(0, 6))
     self.topic_select = UK.SearchSelect(topic_slot, [], command=self.on_topic_pick, pop_w=220,
-                                   height=36, width=168, bg=UK.C.N50, font=UK.F_SMALL)
+                                   height=36, width=152, bg=UK.C.N50, font=UK.F_SMALL)
     self.topic_select.pack(side="left")
     refresh_topic(self)
 
@@ -225,7 +304,7 @@ def build(self):
 
     # ---------- 底栏 ----------
     foot = tk.Frame(self.content, bg=UK.C.N50)
-    foot.pack(fill="x", side="bottom", padx=24, pady=(10, 16))
+    foot.pack(fill="x", side="bottom", padx=20, pady=(8, 12))
     self.lbl_stat = tk.Label(foot, text=f"已捕获 {len(self.records)} 条 · {len({r['name'] for r in self.records})} 位发言人", bg=UK.C.N50,
                              fg=UK.C.SUB, font=UK.F_MINI)
     self.lbl_stat.pack(side="left")
@@ -239,11 +318,16 @@ def build(self):
     self.lbl_feedback = tk.Label(foot, text="", bg=UK.C.N50,
                                  fg=UK.C.A600, font=UK.F_MINI, anchor="w")
 
+    # 结束会议后的快捷归档提示条（默认隐藏，点「结束」清屏后出现）
+    self.archive_bar = tk.Frame(self.content, bg=UK.C.N0,
+                                highlightbackground=UK.C.LINE, highlightthickness=1,
+                                padx=14, pady=8)
+
     # ---------- 主体 ----------
     body = tk.Frame(self.content, bg=UK.C.N50)
-    body.pack(fill="both", expand=True, padx=24)
+    body.pack(fill="both", expand=True, padx=20)
 
-    side = UK.Card(body, radius=UK.R_CARD, padding=16, bg=UK.C.N50)
+    side = UK.Card(body, radius=UK.R_CARD, padding=14, bg=UK.C.N50)
     side.configure(width=192)
     side.pack(side="left", fill="y")
     side.pack_propagate(False)
@@ -251,8 +335,8 @@ def build(self):
                                    bg=UK.C.N0)
     self.speakers.pack(fill="both", expand=True)
 
-    card = UK.Card(body, radius=UK.R_CARD, padding=16, bg=UK.C.N50)
-    card.pack(side="left", fill="both", expand=True, padx=(14, 0))
+    card = UK.Card(body, radius=UK.R_CARD, padding=14, bg=UK.C.N50)
+    card.pack(side="left", fill="both", expand=True, padx=(12, 0))
 
     # 阅读视图与采集控制收进正文卡顶栏，外部只保留两行控制条。
     readbar = tk.Frame(card.body, bg=UK.C.N0)

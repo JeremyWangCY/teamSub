@@ -333,6 +333,8 @@ def open_history(app):
                     return
                 state['all'] = [session if s.path == session.path else s for s in state['all']]
                 filter_list()
+                import frontend_shell as FS
+                FS.refresh_recent(app)
             rename_meeting(app, sessions[0], renamed)
         listing.bind('<F2>', lambda e: rename_selected())
         def read(action):
@@ -425,6 +427,8 @@ def open_history(app):
                 else:
                     state['note'] = f'已移入回收站 {len(value.removed)} 个文件'
                 refresh()          # 无论成败都重读列表，界面反映真实磁盘状态
+                import frontend_shell as FS
+                FS.refresh_recent(app)
 
             def failed(exc):
                 state['note'] = '删除未完成：' + str(exc)[:300]
